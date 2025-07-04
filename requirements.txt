@@ -12,24 +12,12 @@ pygame>=2.5.0
 tqdm>=4.64.0
 matplotlib>=3.5.0
 
-# 异步支持
-asyncio>=3.4.3
-
-# 数学计算
-math
-
-# 数据处理
-copy
-functools
-multiprocessing
-random
-time
-os
-glob
-
 # 开发工具 (可选)
 jupyter>=1.0.0
 ipython>=8.0.0
+
+# 注意: 以下模块是Python内置模块，无需安装:
+# asyncio, math, copy, functools, multiprocessing, random, time, os, glob
 
 # GPU支持说明:
 # NVIDIA GPU: 安装 CUDA 版本的 PyTorch
