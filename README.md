@@ -13,7 +13,7 @@
 ## 📁 项目结构
 
 ```
-五子棋/
+gomoku-alphazero-ai/
 ├── train.py                    # 核心训练脚本 (AlphaZero算法)
 ├── game_gui.py                 # 图形化游戏界面
 ├── ai_battle.py                # AI对弈评估工具
@@ -21,6 +21,7 @@
 ├── model_4090_trained.pth      # 预训练模型 (RTX 4090训练)
 ├── gomoku_cnn_strong/          # 强化训练模型目录
 ├── requirements.txt            # 项目依赖
+├── LICENSE                     # MIT许可证
 └── README.md                   # 项目说明
 ```
 
@@ -30,8 +31,8 @@
 
 ```bash
 # 克隆项目
-git clone <repository-url>
-cd 五子棋
+git clone https://github.com/Proton1917/gomoku-alphazero-ai.git
+cd gomoku-alphazero-ai
 
 # 安装依赖
 pip install -r requirements.txt
