@@ -5,11 +5,11 @@ import numpy as np
 import copy
 import math
 
-import nn_012 as gomoku_cnn
-from nn_012 import MCTS
+import train as gomoku_cnn
+from train import MCTS
 
 class Config:
-    ai_model = 'run10_2000.pth'
+    ai_model = 'gomoku_cnn_strong/32.pth'  # 使用最新训练的模型（第32轮）
     ai_simulation = 200
     simulation_update = 10
     show_shape = 'circle' # square or circle

@@ -1,0 +1,39 @@
+# 深度学习框架
+torch>=2.0.0
+torchvision>=0.15.0
+
+# 数值计算
+numpy>=1.21.0
+
+# 游戏界面
+pygame>=2.5.0
+
+# 进度条和可视化
+tqdm>=4.64.0
+matplotlib>=3.5.0
+
+# 异步支持
+asyncio>=3.4.3
+
+# 数学计算
+math
+
+# 数据处理
+copy
+functools
+multiprocessing
+random
+time
+os
+glob
+
+# 开发工具 (可选)
+jupyter>=1.0.0
+ipython>=8.0.0
+
+# GPU支持说明:
+# NVIDIA GPU: 安装 CUDA 版本的 PyTorch
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# Apple Silicon: PyTorch 2.0+ 已包含 MPS 支持
+# CPU 版本: 默认安装即可

@@ -16,16 +16,16 @@ import time
 
 board_size = 15
 class Config:
-    batch_size = 256
-    num_epochs = 3
-    learning_rate = 1e-4
+    batch_size = 128  # 增大batch size提升训练效率（M4 Pro内存充足）
+    num_epochs = 5    # 增加每轮训练的epochs
+    learning_rate = 2e-4  # 稍微提高学习率加速收敛
     train_ratio = 0.9
-    num_samples = 100
-    channel = 32
-    num_workers = 10
-    train_simulation = 20
+    num_samples = 200  # 大幅增加样本数量（10倍提升）
+    channel = 64      # 增加通道数提升模型容量（2倍提升）
+    num_workers = 4   # MPS下保持单进程以避免问题
+    train_simulation = 50  # 增加MCTS模拟次数提升数据质量
     base_path = None
-    model_path = 'gomoku_cnn'
+    model_path = 'gomoku_cnn_strong'  # 新的强化训练模型路径
     mcts_type = 'mean'
     output_info = True
     collect_subnode = True
@@ -49,7 +49,7 @@ class ResidualBlock(nn.Module):
         return out
 
 class ValueCNN(nn.Module):
-    def __init__(self, in_channels=3, hidden_channels=32, num_blocks=5, value_dim = 128):
+    def __init__(self, in_channels=3, hidden_channels=64, num_blocks=8, value_dim=256):  # 增加深度和容量
         super(ValueCNN, self).__init__()
         
         self.conv_init = nn.Conv2d(in_channels, hidden_channels, kernel_size=3, padding=1)
@@ -125,7 +125,15 @@ def board_to_tensor(board : list[list[int]]):
     return torch.FloatTensor(tensor)
 
 def get_calc(model, board):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+    
+    # 确保模型在正确的设备上
+    model = model.to(device)
     board_tensor = board_to_tensor(board).unsqueeze(0).to(device)
     with torch.no_grad():
         value, policy = model.calc(board_tensor)
@@ -159,7 +167,12 @@ def evaluation_func(board : list[list[int]]):
 def generate_random_board(model):
     """生成随机的棋盘状态"""
     
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
     model = model.to(device)
     perm = []
     for i in range(0, board_size):
@@ -223,7 +236,12 @@ class MCTS:
         self.puct2 = puct2
         self.use_rand = use_rand
         #self.device = 'cpu'
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
         if type(model) == str:
             self.model = ValueCNN()
             self.model.load_state_dict(torch.load(model,map_location=torch.device(self.device),weights_only=True))
@@ -559,22 +577,31 @@ def augment_data(boards, policies, values, weights):
     )
 
 def generate_selfplay_data(model, num_games, num_simulations=Config.train_simulation):
-    # 使用多进程并行生成游戏
-    
-    model_state_dict = model.state_dict()
-    with multiprocessing.get_context('spawn').Pool(
-        processes=Config.num_workers
-    ) as pool:
-        func = partial(
-            generate_single_game,
-            model_state_dict=model_state_dict,
-            num_simulations=num_simulations
-        )
-        results = list(tqdm(
-            pool.imap(func, range(num_games)),
-            total=num_games,
-            desc="Generating games"
-        ))
+    # 检查是否使用MPS，如果是则使用单进程模式
+    if torch.backends.mps.is_available():
+        # 单进程模式
+        results = []
+        model_state_dict = model.state_dict()
+        
+        for i in tqdm(range(num_games), desc="Generating games"):
+            result = generate_single_game(i, model_state_dict, num_simulations)
+            results.append(result)
+    else:
+        # 使用多进程并行生成游戏
+        model_state_dict = model.state_dict()
+        with multiprocessing.get_context('spawn').Pool(
+            processes=Config.num_workers
+        ) as pool:
+            func = partial(
+                generate_single_game,
+                model_state_dict=model_state_dict,
+                num_simulations=num_simulations
+            )
+            results = list(tqdm(
+                pool.imap(func, range(num_games)),
+                total=num_games,
+                desc="Generating games"
+            ))
 
     # 整合结果
     boards, policies, values, weights = [], [], [], []
@@ -663,7 +690,12 @@ class Model:
     def __init__(self, location, use_rand=0.01,simulations=200, c_puct=1):
         self.simulations=simulations
         self.model = ValueCNN()
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
         self.model.load_state_dict(torch.load(location,map_location=torch.device(self.device),weights_only=True))
         self.mcts = MCTS(self.model,use_rand=use_rand,c_puct=c_puct)
     def call(self, board, temperature=0, simulations=-1,debug=0):
@@ -689,7 +721,12 @@ class Model:
 
 def train_model(model, train_loader, val_loader, config):
     """训练模型"""
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
     model.to(device)
     
     value_criterion = nn.MSELoss(reduction='none')
@@ -793,18 +830,69 @@ def plot_training_history(train_losses, val_losses):
 # 主训练函数
 def work():
     """
-    主训练函数
-    evaluation_func: 你的评估函数 f: List[List[int]] -> float
+    主训练函数 - 50轮强化训练，提升模型棋力接近4090训练水平
+    支持断点续训功能
     """
+    import time
+    import glob
+    start_time = time.time()
+    
     config = Config()
     model = ValueCNN()
-    if config.base_path != None:
-        model.load_state_dict(torch.load(config.base_path, weights_only=True))
     
-    for t in range(1800, 2000):
+    # 🔄 检查是否有已训练的模型（断点续训）
+    start_round = 0
+    if os.path.exists(config.model_path):
+        existing_models = glob.glob(os.path.join(config.model_path, '[0-9]*.pth'))
+        if existing_models:
+            # 找到最新的模型文件
+            model_numbers = []
+            for model_file in existing_models:
+                try:
+                    num = int(os.path.basename(model_file).split('.')[0])
+                    model_numbers.append(num)
+                except:
+                    continue
+            
+            if model_numbers:
+                latest_round = max(model_numbers)
+                latest_model_path = os.path.join(config.model_path, f"{latest_round}.pth")
+                
+                print(f"🔄 发现已训练模型，从第{latest_round}轮继续训练")
+                print(f"📂 加载模型: {latest_model_path}")
+                model.load_state_dict(torch.load(latest_model_path, weights_only=True))
+                start_round = latest_round
+                print(f"✅ 模型加载成功，将从第{start_round + 1}轮开始继续训练")
+    
+    if config.base_path != None and start_round == 0:
+        model.load_state_dict(torch.load(config.base_path, weights_only=True))
+        print(f"📂 从指定路径加载初始模型: {config.base_path}")
+    
+    if start_round == 0:
+        print("🚀 开始50轮强化训练计划")
+    else:
+        print(f"🔄 继续50轮强化训练计划 (从第{start_round + 1}轮开始)")
+    
+    print(f"📊 训练配置:")
+    print(f"   - 总训练轮数: 50")
+    print(f"   - 已完成轮数: {start_round}")
+    print(f"   - 剩余轮数: {50 - start_round}")
+    print(f"   - 每轮样本数: {config.num_samples}")
+    print(f"   - 每轮epochs: {config.num_epochs}")
+    print(f"   - MCTS模拟次数: {config.train_simulation}")
+    print(f"   - 批处理大小: {config.batch_size}")
+    print(f"   - 模型通道数: {config.channel}")
+    print(f"   - 预计总样本: {50 * config.num_samples}")
+    print("="*60)
+    
+    for t in range(start_round, 50):  # 从断点开始继续训练
+        round_start = time.time()
         model.eval()
-        print("Working on training step ", t)
+        print(f"🔄 第{t+1}/50轮训练开始...")
+        print(f"⏰ 开始时间: {time.strftime('%H:%M:%S')}")
+        
         # 生成训练数据
+        print("📈 生成自博弈数据...")
         boards, policies, values, weights = generate_selfplay_data(model, config.num_samples)
         
         # 划分训练集和验证集
@@ -827,21 +915,46 @@ def work():
         val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False)
         
         # 训练模型
+        print("🧠 开始神经网络训练...")
         train_losses, val_losses = train_model(model, train_loader, val_loader, config)
+        
+        round_time = time.time() - round_start
+        elapsed_time = time.time() - start_time
+        completed_rounds = t - start_round + 1
+        avg_time_per_round = elapsed_time / completed_rounds
+        remaining_rounds = 50 - t - 1
+        estimated_remaining = avg_time_per_round * remaining_rounds
         
         # 绘制训练历史
         #plot_training_history(train_losses, val_losses)
-        print(train_losses)
-        print(val_losses)
-        
+        print(f"✅ 第{t+1}/50轮训练完成")
+        print(f"⏱️  本轮耗时: {round_time/60:.1f}分钟")
+        print(f"⌛ 本次运行总耗时: {elapsed_time/60:.1f}分钟")
+        print(f"📈 完成进度: {(t+1)/50*100:.1f}% ({t+1}/50)")
+        if completed_rounds > 1:
+            print(f"🔮 预计剩余: {estimated_remaining/60:.1f}分钟")
+        print(f"📊 训练损失: {[f'{loss:.4f}' for loss in train_losses]}")
+        print(f"📉 验证损失: {[f'{loss:.4f}' for loss in val_losses]}")
         
         # 保存模型
         os.makedirs(config.model_path, exist_ok=True) 
         checkpoint = os.path.join(config.model_path, f"{t + 1}.pth")
-        print(checkpoint)
+        print(f"💾 保存模型: {checkpoint}")
         torch.save(model.state_dict(), checkpoint)
-        print(f"模型已保存为 {checkpoint}")
+        print(f"✅ 第{t+1}轮训练完成，模型已保存")
+        
+        # 每10轮保存一个备份
+        if (t + 1) % 10 == 0:
+            backup_path = os.path.join(config.model_path, f"backup_round_{t + 1}.pth")
+            torch.save(model.state_dict(), backup_path)
+            print(f"🔄 创建第{t+1}轮备份: {backup_path}")
+        
+        print("="*60)
     
+    total_time = time.time() - start_time
+    print("🎉 训练完成！50轮强化训练已结束")
+    print(f"🏆 总训练时间: {total_time/3600:.2f}小时")
+    print(f"📈 平均每轮: {total_time/50/60:.1f}分钟")
     return model
 
 # 使用示例

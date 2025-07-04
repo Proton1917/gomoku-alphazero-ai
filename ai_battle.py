@@ -11,10 +11,10 @@ import multiprocessing
 from tqdm import tqdm
 from functools import partial
 try:
-    import nn_012
+    import train
     AI_AVAILABLE = True
 except ImportError:
-    print("Warning: nn_008 module not found. AI modes will be disabled.")
+    print("Warning: train module not found. AI modes will be disabled.")
     AI_AVAILABLE = False    
 
 def evaluation_func(board : list[list[int]]):
@@ -42,15 +42,15 @@ def evaluation_func(board : list[list[int]]):
                             return -(1 - num_used * 3e-4)
     return 0
 
-board_size = nn_012.board_size
+board_size = train.board_size
 class Config:
     num_workers=5
     num_games=5
     num_simulations=100
-    name1 = "run10_2000.pth"
-    name2 = "run10_2000.pth"
-    Model1 = nn_012.Model(name1)
-    Model2 = nn_012.Model(name2)
+    name1 = "model_4090_trained.pth"
+    name2 = "model_4090_trained.pth"
+    Model1 = train.Model(name1)
+    Model2 = train.Model(name2)
 
 def play_single_game(_, Model1, Model2):
     board = [[0] * board_size for _ in range(board_size)]
