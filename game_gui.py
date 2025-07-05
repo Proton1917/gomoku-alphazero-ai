@@ -4,12 +4,14 @@ import pygame
 import numpy as np
 import copy
 import math
+import os
+import glob
 
 import train as gomoku_cnn
 from train import MCTS
 
 class Config:
-    ai_model = 'gomoku_cnn_strong/32.pth'  # 使用最新训练的模型（第32轮）
+    ai_model = None  # 将在运行时选择
     ai_simulation = 200
     simulation_update = 10
     show_shape = 'circle' # square or circle
@@ -21,7 +23,7 @@ BLACK = (0, 0, 0)
 WHITE = (255, 255, 255)
 
 class GomokuGUI:
-    def __init__(self, board_size=15):
+    def __init__(self, board_size=15, model_path=None):
         pygame.init()
         self.board_size = board_size
         self.cell_size = 40
@@ -36,8 +38,17 @@ class GomokuGUI:
         self.move_history = []
         self.history_index = -1
 
-        self.mcts = MCTS(model=Config.ai_model,use_rand=0)
+        # 使用传入的模型路径
+        Config.ai_model = model_path
+        self.mcts = MCTS(model=Config.ai_model, use_rand=0)
         self.root = None
+        
+        # 显示推理框架信息
+        print(f"🧠 推理框架已初始化")
+        print(f"📁 使用模型: {Config.ai_model}")
+        print(f"🔧 推理设备: {self.mcts.device}")
+        print(f"⚡ MCTS模拟次数: {Config.ai_simulation}")
+        print(f"🎯 推理框架准备就绪!")
 
         self.enable_research = False
         self.show_nn = False
@@ -196,6 +207,7 @@ class GomokuGUI:
             self.root = None
 
     def run_mcts(self, num_simulations, cur_root=None):
+        print(f"🤖 开始推理: {num_simulations}次模拟")
         new_board = copy.deepcopy(self.board)
         if self.current_player == -1:
             for i in range(0, self.board_size):
@@ -203,6 +215,7 @@ class GomokuGUI:
                     new_board[i][j] = -new_board[i][j]
         result = self.mcts.run(new_board, num_simulations, train=0, cur_root=cur_root, return_root=1)
         _, self.root = result
+        print(f"✅ 推理完成: 搜索了{self.root.visit_count}个节点")
 
     def get_ai_move(self):
         if gomoku_cnn.evaluation_func(self.board):
@@ -222,11 +235,14 @@ class GomokuGUI:
     def press_autoplay(self):
         self.autoplay = not self.autoplay
     def press_play(self):
+        print(f"🎮 玩家请求AI走棋")
         self.show_nn_val, self.show_nn_prob = None, None
         already_done = self.root.visit_count if self.root else 0
         if already_done < Config.ai_simulation:
+            print(f"🔄 需要更多思考: {Config.ai_simulation - already_done}次额外模拟")
             self.run_mcts(Config.ai_simulation - already_done)
         move = self.get_ai_move()
+        print(f"🎯 AI选择走法: {move}")
         self.make_move(move)
     def press_back(self):
         self.show_nn_val, self.show_nn_prob = None, None
@@ -326,10 +342,87 @@ class GomokuGUI:
 
         pygame.quit()
 
+def select_model():
+    """选择要使用的模型"""
+    models = []
+    
+    # 检查强化训练模型目录
+    strong_path = 'gomoku_cnn_strong'
+    if os.path.exists(strong_path):
+        model_files = glob.glob(os.path.join(strong_path, '*.pth'))
+        for model_file in model_files:
+            filename = os.path.basename(model_file)
+            if filename.startswith('backup_'):
+                continue  # 跳过备份文件
+            try:
+                round_num = int(filename.split('.')[0])
+                models.append({
+                    'path': model_file,
+                    'name': f"强化训练第{round_num}轮",
+                    'round': round_num,
+                    'type': 'strong'
+                })
+            except:
+                continue
+    
+    # 注释掉基础模型，因为架构不兼容
+    # base_model = 'model_4090_trained.pth'
+    # if os.path.exists(base_model):
+    #     models.append({
+    #         'path': base_model,
+    #         'name': "基础模型(4090训练)",
+    #         'round': 0,
+    #         'type': 'base'
+    #     })
+    
+    if not models:
+        print("❌ 未找到任何可用模型！")
+        return None
+    
+    # 按轮次倒序排列(最新的在前面)
+    models.sort(key=lambda x: x['round'], reverse=True)
+    
+    print("🤖 可用模型列表：")
+    print("="*50)
+    for i, model in enumerate(models):
+        print(f"{i+1}. {model['name']} - 强化训练版本")
+    print("="*50)
+    
+    while True:
+        try:
+            choice = input(f"请选择模型 (1-{len(models)}, 回车使用最新): ").strip()
+            
+            if choice == "":
+                # 默认使用最新模型
+                selected = models[0]
+                break
+            
+            choice = int(choice)
+            if 1 <= choice <= len(models):
+                selected = models[choice - 1]
+                break
+            else:
+                print(f"❌ 请输入 1-{len(models)} 之间的数字")
+        except ValueError:
+            print("❌ 请输入有效数字")
+        except KeyboardInterrupt:
+            print("\n👋 退出程序")
+            return None
+    
+    print(f"✅ 已选择: {selected['name']}")
+    print(f"📁 模型路径: {selected['path']}")
+    return selected['path']
+
 if platform.system() == "Emscripten":
-    game = GomokuGUI()
-    asyncio.ensure_future(game.main())
+    model_path = select_model()
+    if model_path:
+        game = GomokuGUI(model_path=model_path)
+        asyncio.ensure_future(game.main())
 else:
     if __name__ == "__main__":
-        game = GomokuGUI()
-        asyncio.run(game.main())
+        model_path = select_model()
+        if model_path:
+            game = GomokuGUI(model_path=model_path)
+            asyncio.run(game.main())
+        else:
+            print("❌ 未选择模型，程序退出")
