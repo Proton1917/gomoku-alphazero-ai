@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+
+# Databases / runtime data
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+data/
+gtp_logs/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.tsbuildinfo
+
+# Rust
+server/target/
+
+# Model weights (large binaries, managed outside git)
+*.pth
+*.bin.gz
+*.onnx
+
+# Third-party engines (vendored separately)
+AlphaGomoku/
+Rapfi-engine/
+rapfi-250615/
+engines/
+
+# macOS
+.DS_Store

@@ -5,7 +5,6 @@
 """
 
 import os
-import glob
 import time
 import copy
 import numpy as np
@@ -13,6 +12,7 @@ import asyncio
 import platform
 import pygame
 
+from backend.models_service import discover_models
 import train as gomoku_cnn
 from train import MCTS
 
@@ -23,30 +23,7 @@ class ModelBattle:
         
     def get_available_models(self):
         """获取所有可用的模型文件"""
-        models = []
-        
-        # 检查强化训练模型目录
-        strong_path = 'gomoku_cnn_strong'
-        if os.path.exists(strong_path):
-            model_files = glob.glob(os.path.join(strong_path, '*.pth'))
-            for model_file in model_files:
-                filename = os.path.basename(model_file)
-                if filename.startswith('backup_'):
-                    continue  # 跳过备份文件
-                try:
-                    round_num = int(filename.split('.')[0])
-                    models.append({
-                        'path': model_file,
-                        'name': f"第{round_num}轮模型",
-                        'round': round_num,
-                        'type': 'strong'
-                    })
-                except:
-                    continue
-        
-        # 按轮次排序
-        models.sort(key=lambda x: x['round'])
-        return models
+        return discover_models()
     
     def select_models(self):
         """选择对战的两个模型"""
@@ -57,7 +34,14 @@ class ModelBattle:
         print("🤖 可用模型列表：")
         print("="*60)
         for i, model in enumerate(self.available_models):
-            print(f"{i+1:2d}. {model['name']:15s} - {model['path']}")
+            if model['type'] == 'legacy':
+                print(f"{i+1:2d}. {model['name']:15s} - 🏆 当前默认最强 (推荐) - {model['path']}")
+            elif model['round'] == 55:
+                print(f"{i+1:2d}. {model['name']:15s} - ⭐ 正式模型池首选 - {model['path']}")
+            elif model['round'] in (50, 49, 48):
+                print(f"{i+1:2d}. {model['name']:15s} - ⭐ 保留候选 - {model['path']}")
+            else:
+                print(f"{i+1:2d}. {model['name']:15s} - 强化训练版本 - {model['path']}")
         print("="*60)
         
         # 选择第一个模型（黑棋）

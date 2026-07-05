@@ -39,10 +39,10 @@ def test_model_strength(model_path, games=10):
     # 测试新模型 vs model_4090_trained.pth
     try:
         # 加载新模型
-        new_model = Model(model_path, device='mps' if torch.backends.mps.is_available() else 'cpu')
+        new_model = Model(model_path)
         
         # 加载原始强模型
-        strong_model = Model('model_4090_trained.pth', device='mps' if torch.backends.mps.is_available() else 'cpu')
+        strong_model = Model('model_4090_trained.pth')
         
         wins = 0
         for i in range(games):

@@ -1,222 +1,157 @@
-# 五子棋 AI - AlphaZero 算法实现
+# 五子棋 AlphaZero AI
 
-基于 AlphaZero 算法（MCTS + CNN）的五子棋人工智能项目，支持训练、游戏对弈和AI分析。
+基于 AlphaZero 算法（MCTS + ResNet CNN）的五子棋项目，现已同时支持：
 
-## 🎯 项目特性
+- 训练与监控
+- Web 版对弈与研究控制台
+- Web 版模型对战
+- 保留 legacy `pygame` GUI
 
-- **强大的AI算法**: 使用 MCTS (蒙特卡洛树搜索) + ResNet CNN 架构
-- **跨平台训练**: 支持 NVIDIA GPU (CUDA) 和 Apple Silicon (MPS) 训练
-- **可视化界面**: 提供图形化游戏界面和AI决策分析
-- **训练监控**: 实时监控训练进度和模型性能
-- **模型对比**: AI模型之间的对弈评估工具
+## 当前架构
 
-## 📁 项目结构
-
-```
-gomoku-alphazero-ai/
-├── train.py                    # 核心训练脚本 (AlphaZero算法)
-├── game_gui.py                 # 图形化游戏界面
-├── ai_battle.py                # AI对弈评估工具
-├── training_monitor.py         # 训练进度监控
-├── model_4090_trained.pth      # 预训练模型 (RTX 4090训练)
-├── gomoku_cnn_strong/          # 强化训练模型目录
-├── requirements.txt            # 项目依赖
-├── LICENSE                     # MIT许可证
-└── README.md                   # 项目说明
+```text
+Gomoku/
+├── train.py                      # 核心模型、MCTS、训练逻辑
+├── backend/                      # FastAPI + WebSocket + SQLite 会话持久化
+├── frontend/                     # React + TypeScript + Vite 单页应用
+├── game_gui.py                   # Legacy: pygame 对弈与研究界面
+├── model_battle.py               # Legacy: pygame 模型对战
+├── ai_battle.py                  # 批量模型评估脚本
+├── training_monitor.py           # 训练监控
+├── gomoku_cnn_strong/            # 强化训练模型目录
+└── requirements.txt              # Python 依赖
 ```
 
-## 🚀 快速开始
+## 快速开始
 
-### 1. 环境准备
+### Python 环境
 
 ```bash
-# 克隆项目
-git clone https://github.com/Proton1917/gomoku-alphazero-ai.git
-cd gomoku-alphazero-ai
-
-# 安装依赖
-pip install -r requirements.txt
+conda run -n base python -m pip install -r requirements.txt
 ```
 
-### 2. 运行游戏界面
+### 启动 Web 后端
 
 ```bash
-python game_gui.py
+cd backend
+conda run -n base uvicorn main:app --reload
 ```
 
-## 🎮 游戏操作
-
-- **鼠标点击**: 落子
-- **R键**: 开启/关闭AI思考可视化
-- **A键**: 自动对弈模式
-- **P键**: AI走一步
-- **B键**: 悔棋
-- **F键**: 前进一步
-- **S键**: 显示神经网络评估
-
-## 🏋️ 训练说明
-
-### 支持的训练平台
-
-1. **NVIDIA GPU** (推荐)
-   - RTX 3060 或更高
-   - CUDA 11.8+
-   - 训练速度: ~1-2天完成50轮
-
-2. **Apple Silicon** (M1/M2/M3/M4)
-   - 使用 MPS 加速
-   - 训练速度: 比NVIDIA GPU慢约2-3倍
-
-3. **CPU训练** (不推荐)
-   - 训练时间极长，仅用于测试
-
-### 开始训练
+### 启动 Web 前端
 
 ```bash
-# 从头开始训练
-python train.py
-
-# 监控训练进度
-python training_monitor.py
+cd frontend
+npm install
+npm run dev
 ```
 
-### 训练配置
+### 一键启动（macOS `.command`）
 
-编辑 `train.py` 中的 `Config` 类来调整训练参数：
-
-```python
-class Config:
-    batch_size = 128        # 批大小
-    num_epochs = 5          # 每轮训练轮数
-    learning_rate = 2e-4    # 学习率
-    num_samples = 200       # 每轮生成样本数
-    train_simulation = 50   # MCTS模拟次数
-    channel = 64           # CNN通道数
+```bash
+./start_project.command
 ```
 
-### 训练流程
+也可以直接在 Finder 里双击 [start_project.command](/Users/gordongauerk/Projects/Neutron's_machine_learning/Gomoku/start_project.command)。
 
-1. **数据生成**: AI自我对弈生成训练数据
-2. **模型训练**: 使用生成的数据训练神经网络
-3. **模型评估**: 新模型与旧模型对弈测试
-4. **迭代更新**: 重复上述过程50轮
+默认情况下：
 
-## 📚 详细训练教程
+- 后端地址：`http://127.0.0.1:8000`
+- 前端地址：`http://127.0.0.1:5173`
 
-### 第一次训练 (从零开始)
+## Web 功能
 
-1. **检查环境**
-   ```bash
-   # 检查 CUDA 支持 (NVIDIA GPU)
-   python -c "import torch; print(torch.cuda.is_available())"
-   
-   # 检查 MPS 支持 (Apple Silicon)
-   python -c "import torch; print(torch.backends.mps.is_available())"
-   ```
+### Play Console
 
-2. **配置训练参数**
-   
-   根据你的硬件调整 `train.py` 中的配置：
-   
-   ```python
-   # 高端GPU (RTX 4070+)
-   class Config:
-       batch_size = 128
-       num_samples = 200
-       train_simulation = 50
-       channel = 64
-   
-   # 中端GPU (RTX 3060/4060) 或 Apple Silicon
-   class Config:
-       batch_size = 64
-       num_samples = 150
-       train_simulation = 40
-       channel = 48
-   
-   # 低端GPU 或 CPU
-   class Config:
-       batch_size = 32
-       num_samples = 100
-       train_simulation = 30
-       channel = 32
-   ```
+- 模型选择 + MCTS 模拟次数配置
+- 新建/恢复持久化对局
+- 人类落子、AI 落子、悔棋、前进
+- 研究模式 WebSocket：每 10 次模拟推送一次热力图
+- 自动对弈 WebSocket：持续推进到终局
+- NN 概率/价值矩阵可视化
 
-3. **开始训练**
-   ```bash
-   python train.py
-   ```
+### Battle Console
 
-4. **监控进度**
-   ```bash
-   # 在另一个终端窗口运行
-   python training_monitor.py
-   ```
+- 选择黑白双方模型
+- 创建持久化对战会话
+- Battle WebSocket 流式推进模型对战
+- 刷新页面后自动尝试恢复最近一次 Battle 会话
 
-### 继续训练 (基于已有模型)
+### SQLite 持久化
 
-如果要基于 `model_4090_trained.pth` 继续强化训练：
+- 数据库文件：`backend/gomoku_web.sqlite3`
+- 持久化内容：棋盘、走子历史、模型路径、模拟次数、终局结果
+- 不持久化 `MCTS` 搜索树；服务重启后从当前局面重新搜索
 
-1. **修改配置**
-   ```python
-   # 在 train.py 中设置基础模型
-   class Config:
-       base_path = 'model_4090_trained.pth'  # 设置基础模型路径
-       model_path = 'gomoku_cnn_strong'      # 输出目录
-   ```
+## Legacy GUI
 
-2. **开始强化训练**
-   ```bash
-   python train.py
-   ```
+如果你仍然想用本地 `pygame` 界面：
 
-### 训练时间估算
+```bash
+conda run -n base python game_gui.py
+conda run -n base python model_battle.py
+```
 
-| 硬件配置 | 每轮训练时间 | 总时间(50轮) |
-|---------|-------------|-------------|
-| RTX 4090 | ~1-2小时 | 2-4天 |
-| RTX 4070 | ~2-3小时 | 4-6天 |
-| RTX 3060 | ~3-4小时 | 6-8天 |
-| M3 Max | ~4-6小时 | 8-12天 |
-| M2 Pro | ~6-8小时 | 12-16天 |
-| M1 | ~8-12小时 | 16-25天 |
+### 操作键位
 
-### 训练优化技巧
+- 鼠标点击：落子
+- `R`：研究模式
+- `A`：自动对弈
+- `P`：AI 走一步
+- `B`：悔棋
+- `F`：前进一步
+- `S`：显示神经网络评估
 
-1. **GPU 内存优化**
-   ```python
-   # 如果遇到 CUDA OOM 错误，减小批大小
-   Config.batch_size = 32  # 或更小
-   ```
+## 训练
 
-2. **训练稳定性**
-   ```python
-   # 降低学习率提高稳定性
-   Config.learning_rate = 1e-4
-   ```
+```bash
+conda run -n base python train.py
+conda run -n base python training_monitor.py
+```
 
-3. **加速训练**
-   ```python
-   # 减少每轮样本数但增加训练轮数
-   Config.num_samples = 100
-   Config.num_epochs = 8
-   ```
+当前默认模型是 `gomoku_cnn_4090_test/model_4090_trained.pth`。正式模型目录仍然是 `gomoku_cnn_strong/`，模型命名为轮次，例如 `55.pth`。当前模型发现逻辑会优先推荐：
 
-### 训练监控指标
+1. 4090 旧基线模型
+2. 第 55 轮
+3. 第 50 轮
+4. 第 49 轮
+5. 第 48 轮
+6. 第 46 轮
 
-运行 `training_monitor.py` 可以看到：
+当前保留的实验目录：
 
-- **训练进度**: 当前完成轮数/总轮数
-- **模型性能**: 新模型vs基础模型的胜率
-- **训练时间**: 每轮耗时和预计完成时间
-- **资源使用**: GPU/CPU/内存使用情况
+- `gomoku_cnn_4090_test/`
+  集中保留 4090 基线与它的派生实验模型：
+  - `model_4090_trained.pth`
+  - `legacy20.pth`
+  - `online_refine_latest.pth`
 
-### 训练中断与恢复
+## API 概览
 
-训练支持自动断点续传：
+### REST
 
-1. **意外中断**: 直接重新运行 `python train.py`
-2. **手动停止**: Ctrl+C 后重新运行
-3. **检查点**: 模型自动保存在 `gomoku_cnn_strong/` 目录
+- `GET /api/models`
+- `POST /api/game/new`
+- `GET /api/game/{id}`
+- `POST /api/game/{id}/move`
+- `POST /api/game/{id}/ai-move`
+- `POST /api/game/{id}/undo`
+- `POST /api/game/{id}/redo`
+- `GET /api/game/{id}/nn`
+- `POST /api/battle/new`
+- `GET /api/battle/{id}`
+
+### WebSocket
+
+- `/ws/game/{id}/research`
+- `/ws/game/{id}/autoplay`
+- `/ws/battle/{id}`
+
+## 构建检查
+
+```bash
+conda run -n base python -m compileall train.py backend game_gui.py model_battle.py
+cd frontend && npm run build
+```
 
 ### 自定义训练
 
@@ -254,8 +189,11 @@ class Config:
 
 ## 📊 模型性能
 
-- **基础模型**: `model_4090_trained.pth` (RTX 4090训练)
-- **强化模型**: `gomoku_cnn_strong/32.pth` (最新强化训练)
+ - **基础模型**: `gomoku_cnn_4090_test/model_4090_trained.pth` (RTX 4090训练)
+ - **当前默认模型**: `gomoku_cnn_4090_test/model_4090_trained.pth`
+ - **独立实验模型**:
+  - `gomoku_cnn_4090_test/legacy20.pth`
+  - `gomoku_cnn_4090_test/online_refine_latest.pth`
 - **棋力评估**: 接近业余高段水平
 
 ## 🛠️ 故障排除

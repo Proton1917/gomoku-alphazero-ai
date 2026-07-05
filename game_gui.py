@@ -4,9 +4,8 @@ import pygame
 import numpy as np
 import copy
 import math
-import os
-import glob
 
+from backend.models_service import discover_models
 import train as gomoku_cnn
 from train import MCTS
 
@@ -178,15 +177,45 @@ class GomokuGUI:
             return (i, j)
         return None
 
+    def get_normalized_board(self):
+        board = copy.deepcopy(self.board)
+        if self.current_player == -1:
+            board = -board
+        return board
+
+    def get_advanced_root(self, move):
+        if self.root is None or move is None or not self.root.children:
+            return None
+        child_info = self.root.children.get(tuple(move))
+        if child_info is None:
+            return None
+        child, _ = child_info
+        if child is None:
+            return None
+        child.parent = None
+        return child
+
+    def get_synced_root(self, board):
+        if self.root is None:
+            return None
+        if not np.array_equal(np.asarray(self.root.board), np.asarray(board)):
+            self.root = None
+            return None
+        return self.root
+
     def make_move(self, move):
         if move is not None:
             i, j = move
+            next_root = self.get_advanced_root(move)
             self.board[i][j] = self.current_player
             self.move_history = self.move_history[:self.history_index + 1]
             self.move_history.append((move, self.current_player))
             self.history_index += 1
             self.current_player = -self.current_player
-            self.root = None  # Reset root after move
+            if gomoku_cnn.evaluation_func(self.board) == 0 and np.any(self.board == 0):
+                self.root = next_root
+            else:
+                self.root = None
 
     def undo_move(self):
         if self.history_index >= 0:
@@ -208,11 +237,8 @@ class GomokuGUI:
 
     def run_mcts(self, num_simulations, cur_root=None):
         print(f"🤖 开始推理: {num_simulations}次模拟")
-        new_board = copy.deepcopy(self.board)
-        if self.current_player == -1:
-            for i in range(0, self.board_size):
-                for j in range(0, self.board_size):
-                    new_board[i][j] = -new_board[i][j]
+        new_board = self.get_normalized_board()
+        cur_root = self.get_synced_root(cur_root if cur_root is not None else self.root)
         result = self.mcts.run(new_board, num_simulations, train=0, cur_root=cur_root, return_root=1)
         _, self.root = result
         print(f"✅ 推理完成: 搜索了{self.root.visit_count}个节点")
@@ -240,7 +266,7 @@ class GomokuGUI:
         already_done = self.root.visit_count if self.root else 0
         if already_done < Config.ai_simulation:
             print(f"🔄 需要更多思考: {Config.ai_simulation - already_done}次额外模拟")
-            self.run_mcts(Config.ai_simulation - already_done)
+            self.run_mcts(Config.ai_simulation - already_done, cur_root=self.root)
         move = self.get_ai_move()
         print(f"🎯 AI选择走法: {move}")
         self.make_move(move)
@@ -344,56 +370,29 @@ class GomokuGUI:
 
 def select_model():
     """选择要使用的模型"""
-    models = []
-    
-    # 检查强化训练模型目录
-    strong_path = 'gomoku_cnn_strong'
-    if os.path.exists(strong_path):
-        model_files = glob.glob(os.path.join(strong_path, '*.pth'))
-        for model_file in model_files:
-            filename = os.path.basename(model_file)
-            if filename.startswith('backup_'):
-                continue  # 跳过备份文件
-            try:
-                round_num = int(filename.split('.')[0])
-                models.append({
-                    'path': model_file,
-                    'name': f"强化训练第{round_num}轮",
-                    'round': round_num,
-                    'type': 'strong'
-                })
-            except:
-                continue
-    
-    # 注释掉基础模型，因为架构不兼容
-    # base_model = 'model_4090_trained.pth'
-    # if os.path.exists(base_model):
-    #     models.append({
-    #         'path': base_model,
-    #         'name': "基础模型(4090训练)",
-    #         'round': 0,
-    #         'type': 'base'
-    #     })
-    
+    models = discover_models()
     if not models:
         print("❌ 未找到任何可用模型！")
         return None
     
-    # 按轮次倒序排列(最新的在前面)
-    models.sort(key=lambda x: x['round'], reverse=True)
-    
     print("🤖 可用模型列表：")
     print("="*50)
     for i, model in enumerate(models):
-        print(f"{i+1}. {model['name']} - 强化训练版本")
+        if model['type'] == 'legacy':
+            print(f"{i+1}. {model['name']} - 🏆 当前默认最强 (推荐)")
+        elif model['round'] == 55:
+            print(f"{i+1}. {model['name']} - ⭐ 正式模型池首选")
+        elif model['round'] in (50, 49, 48):
+            print(f"{i+1}. {model['name']} - ⭐ 保留候选")
+        else:
+            print(f"{i+1}. {model['name']} - 强化训练版本")
     print("="*50)
     
     while True:
         try:
-            choice = input(f"请选择模型 (1-{len(models)}, 回车使用最新): ").strip()
+            choice = input(f"请选择模型 (1-{len(models)}, 回车使用当前默认模型): ").strip()
             
             if choice == "":
-                # 默认使用最新模型
                 selected = models[0]
                 break
             

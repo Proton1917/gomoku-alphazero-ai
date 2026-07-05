@@ -16,6 +16,7 @@ import time
 
 board_size = 15
 class Config:
+    total_rounds = 80  # 允许在现有最强模型上继续训练，而不是锁死 50 轮
     batch_size = 128  # 增大batch size提升训练效率（M4 Pro内存充足）
     num_epochs = 5    # 增加每轮训练的epochs
     learning_rate = 2e-4  # 稍微提高学习率加速收敛
@@ -30,6 +31,15 @@ class Config:
     output_info = True
     collect_subnode = True
     train_buff = 0.8
+    selfplay_empty_board_prob = 0.2
+    selfplay_random_start_max_moves = 12
+    selfplay_random_start_candidates = 96
+    selfplay_opening_moves = 10
+    selfplay_midgame_moves = 24
+    selfplay_opening_temperature = 1.0
+    selfplay_midgame_temperature = 0.35
+    selfplay_endgame_temperature = 0.08
+    selfplay_temperature_jitter = 0.12
 
 class ResidualBlock(nn.Module):
     def __init__(self, channels):
@@ -93,6 +103,31 @@ class ValueCNN(nn.Module):
             probs = F.softmax(logits, dim=1).view(-1, board_size, board_size)
             return value, probs
 
+
+def infer_model_kwargs_from_state_dict(state_dict):
+    hidden_channels = state_dict["conv_init.weight"].shape[0]
+    block_indexes = {int(key.split(".")[1]) for key in state_dict if key.startswith("res_blocks.")}
+    num_blocks = len(block_indexes)
+    value_dim = state_dict["value_fc1.weight"].shape[0]
+    return {
+        "in_channels": state_dict["conv_init.weight"].shape[1],
+        "hidden_channels": hidden_channels,
+        "num_blocks": num_blocks,
+        "value_dim": value_dim,
+    }
+
+
+def build_model_from_state_dict(state_dict):
+    return ValueCNN(**infer_model_kwargs_from_state_dict(state_dict))
+
+
+def get_runtime_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
 class Weighted_Dataset(Dataset):
     def __init__(self, boards, policies, values, weights):
         self.boards = boards
@@ -125,12 +160,7 @@ def board_to_tensor(board : list[list[int]]):
     return torch.FloatTensor(tensor)
 
 def get_calc(model, board):
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
-    else:
-        device = torch.device('cpu')
+    device = get_runtime_device()
     
     # 确保模型在正确的设备上
     model = model.to(device)
@@ -167,39 +197,27 @@ def evaluation_func(board : list[list[int]]):
 def generate_random_board(model):
     """生成随机的棋盘状态"""
     
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
-    else:
-        device = torch.device('cpu')
+    device = get_runtime_device()
     model = model.to(device)
-    perm = []
-    for i in range(0, board_size):
-        for j in range(0, board_size):
-            perm.append((i, j))
-    random.shuffle(perm)
-
     best_val = 1e9
     best_board = [[0 for _ in range(board_size)] for _ in range(board_size)]
-    if random.randint(0, 4) == 0:
-        num_run = 0
-    else:
-        num_run = random.randint(50, random.randint(50, 1000))
+    if random.random() < Config.selfplay_empty_board_prob:
+        return best_board
 
-    for t in range(0, num_run):
-        num_moves = random.randint(0, 10)
+    positions = [(i, j) for i in range(board_size) for j in range(board_size)]
+    num_run = Config.selfplay_random_start_candidates
+
+    for _ in range(0, num_run):
+        num_moves = random.randint(0, Config.selfplay_random_start_max_moves)
         board = [[0 for _ in range(board_size)] for _ in range(board_size)]
         current_player = -1
-        for _ in range(num_moves):
-            # 随机选择一个空位下棋
-            i, j = perm[_]
+        for i, j in random.sample(positions, k=num_moves):
             board[i][j] = current_player
             current_player = -current_player
         if evaluation_func(board) != 0:
             continue
 
-        value, policy = get_calc(model, board)
+        value, _policy = get_calc(model, board)
         val = max(float(value), -float(value))
         if val < best_val:
             best_val = val
@@ -207,6 +225,19 @@ def generate_random_board(model):
     #if Config.output_info:
     #    print(best_val)
     return best_board
+
+
+def selfplay_temperature_for_move(move_num: int) -> float:
+    if move_num < Config.selfplay_opening_moves:
+        base = Config.selfplay_opening_temperature
+    elif move_num < Config.selfplay_midgame_moves:
+        base = Config.selfplay_midgame_temperature
+    else:
+        base = Config.selfplay_endgame_temperature
+
+    low = max(0.0, base * (1.0 - Config.selfplay_temperature_jitter))
+    high = base * (1.0 + Config.selfplay_temperature_jitter)
+    return random.uniform(low, high)
 
 class MCTSNode:
     def __init__(self, board, parent=None, move=None):
@@ -231,20 +262,16 @@ class MCTSNode:
 
 accumulate_sum = 0
 class MCTS:
-    def __init__(self, model, c_puct=0.8, puct2=0.02, parallel=0, use_rand=0.01):
+    def __init__(self, model, c_puct=0.8, puct2=0.02, use_rand=0.01):
         self.c_puct = c_puct
         self.puct2 = puct2
         self.use_rand = use_rand
-        #self.device = 'cpu'
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
-        else:
-            self.device = torch.device('cpu')
+        self.device = get_runtime_device()
         if type(model) == str:
-            self.model = ValueCNN()
-            self.model.load_state_dict(torch.load(model,map_location=torch.device(self.device),weights_only=True))
+            state_dict = torch.load(model, map_location=torch.device(self.device), weights_only=True)
+            self.model = build_model_from_state_dict(state_dict)
+            self.model.load_state_dict(state_dict)
+            self.model = self.model.to(self.device)
         else:
             self.model = model.to(self.device)
         self.visited_nodes = []
@@ -643,24 +670,22 @@ def calc_next_move(board, probs, temperature=0):
 
 def generate_single_game(_, model_state_dict, num_simulations):
     """生成单局游戏数据"""
-    model = ValueCNN()
+    model = build_model_from_state_dict(model_state_dict)
     model.load_state_dict(model_state_dict)
     model.eval()  # 设置为评估模式
     board = generate_random_board(model)
-    temperature=0.1*random.randint(0,9)
     
     with torch.no_grad():
         mcts = MCTS(model)
         
-        game_values = []
         root = None
         for move_num in range(board_size*board_size):
             # MCTS获取策略
             infos, new_root = mcts.run(board, num_simulations, train=0, cur_root=root, return_root=1)
-            value, action_probs = infos
+            _value, action_probs = infos
             
             # 选择动作
-            
+            temperature = selfplay_temperature_for_move(move_num)
             action = calc_next_move(board, action_probs, temperature)
             # 执行动作
             board[action[0]][action[1]] = 1
@@ -689,14 +714,11 @@ def generate_single_game(_, model_state_dict, num_simulations):
 class Model:
     def __init__(self, location, use_rand=0.01,simulations=200, c_puct=1):
         self.simulations=simulations
-        self.model = ValueCNN()
-        if torch.cuda.is_available():
-            self.device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            self.device = torch.device('mps')
-        else:
-            self.device = torch.device('cpu')
-        self.model.load_state_dict(torch.load(location,map_location=torch.device(self.device),weights_only=True))
+        self.device = get_runtime_device()
+        state_dict = torch.load(location, map_location=torch.device(self.device), weights_only=True)
+        self.model = build_model_from_state_dict(state_dict)
+        self.model.load_state_dict(state_dict)
+        self.model = self.model.to(self.device)
         self.mcts = MCTS(self.model,use_rand=use_rand,c_puct=c_puct)
     def call(self, board, temperature=0, simulations=-1,debug=0):
         if simulations == -1:
@@ -721,12 +743,7 @@ class Model:
 
 def train_model(model, train_loader, val_loader, config):
     """训练模型"""
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
-    else:
-        device = torch.device('cpu')
+    device = get_runtime_device()
     model.to(device)
     
     value_criterion = nn.MSELoss(reduction='none')
@@ -830,7 +847,7 @@ def plot_training_history(train_losses, val_losses):
 # 主训练函数
 def work():
     """
-    主训练函数 - 50轮强化训练，提升模型棋力接近4090训练水平
+    主训练函数 - 支持多轮强化训练与断点续训
     支持断点续训功能
     """
     import time
@@ -838,7 +855,8 @@ def work():
     start_time = time.time()
     
     config = Config()
-    model = ValueCNN()
+    model = None
+    load_device = get_runtime_device()
     
     # 🔄 检查是否有已训练的模型（断点续训）
     start_round = 0
@@ -860,35 +878,48 @@ def work():
                 
                 print(f"🔄 发现已训练模型，从第{latest_round}轮继续训练")
                 print(f"📂 加载模型: {latest_model_path}")
-                model.load_state_dict(torch.load(latest_model_path, weights_only=True))
+                state_dict = torch.load(latest_model_path, map_location=load_device, weights_only=True)
+                model = build_model_from_state_dict(state_dict)
+                model.load_state_dict(state_dict)
+                model = model.to(load_device)
                 start_round = latest_round
                 print(f"✅ 模型加载成功，将从第{start_round + 1}轮开始继续训练")
     
     if config.base_path != None and start_round == 0:
-        model.load_state_dict(torch.load(config.base_path, weights_only=True))
+        state_dict = torch.load(config.base_path, map_location=load_device, weights_only=True)
+        model = build_model_from_state_dict(state_dict)
+        model.load_state_dict(state_dict)
+        model = model.to(load_device)
         print(f"📂 从指定路径加载初始模型: {config.base_path}")
+
+    if model is None:
+        model = ValueCNN()
     
+    if start_round >= config.total_rounds:
+        print(f"⏹️ 当前最新模型已到第{start_round}轮，目标总轮数是第{config.total_rounds}轮，无需继续训练。")
+        return model
+
     if start_round == 0:
-        print("🚀 开始50轮强化训练计划")
+        print(f"🚀 开始{config.total_rounds}轮强化训练计划")
     else:
-        print(f"🔄 继续50轮强化训练计划 (从第{start_round + 1}轮开始)")
+        print(f"🔄 继续强化训练计划 (从第{start_round + 1}轮开始，目标第{config.total_rounds}轮)")
     
     print(f"📊 训练配置:")
-    print(f"   - 总训练轮数: 50")
+    print(f"   - 总训练轮数: {config.total_rounds}")
     print(f"   - 已完成轮数: {start_round}")
-    print(f"   - 剩余轮数: {50 - start_round}")
+    print(f"   - 剩余轮数: {config.total_rounds - start_round}")
     print(f"   - 每轮样本数: {config.num_samples}")
     print(f"   - 每轮epochs: {config.num_epochs}")
     print(f"   - MCTS模拟次数: {config.train_simulation}")
     print(f"   - 批处理大小: {config.batch_size}")
     print(f"   - 模型通道数: {config.channel}")
-    print(f"   - 预计总样本: {50 * config.num_samples}")
+    print(f"   - 预计新增样本: {(config.total_rounds - start_round) * config.num_samples}")
     print("="*60)
     
-    for t in range(start_round, 50):  # 从断点开始继续训练
+    for t in range(start_round, config.total_rounds):  # 从断点开始继续训练
         round_start = time.time()
         model.eval()
-        print(f"🔄 第{t+1}/50轮训练开始...")
+        print(f"🔄 第{t+1}/{config.total_rounds}轮训练开始...")
         print(f"⏰ 开始时间: {time.strftime('%H:%M:%S')}")
         
         # 生成训练数据
@@ -922,12 +953,12 @@ def work():
         elapsed_time = time.time() - start_time
         completed_rounds = t - start_round + 1
         avg_time_per_round = elapsed_time / completed_rounds
-        remaining_rounds = 50 - t - 1
+        remaining_rounds = config.total_rounds - t - 1
         estimated_remaining = avg_time_per_round * remaining_rounds
         
         # 绘制训练历史
         #plot_training_history(train_losses, val_losses)
-        print(f"✅ 第{t+1}/50轮训练完成")
+        print(f"✅ 第{t+1}/{config.total_rounds}轮训练完成")
         print(f"⏱️  本轮耗时: {round_time/60:.1f}分钟")
         print(f"⌛ 本次运行总耗时: {elapsed_time/60:.1f}分钟")
         print(f"📈 完成进度: {(t+1)/50*100:.1f}% ({t+1}/50)")
@@ -952,9 +983,9 @@ def work():
         print("="*60)
     
     total_time = time.time() - start_time
-    print("🎉 训练完成！50轮强化训练已结束")
+    print(f"🎉 训练完成！已训练到第{config.total_rounds}轮")
     print(f"🏆 总训练时间: {total_time/3600:.2f}小时")
-    print(f"📈 平均每轮: {total_time/50/60:.1f}分钟")
+    print(f"📈 平均每轮: {total_time/max(config.total_rounds - start_round, 1)/60:.1f}分钟")
     return model
 
 # 使用示例
