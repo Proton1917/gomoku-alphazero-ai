@@ -1,4 +1,4 @@
-import type { BattleState, GameState, ModelInfo, NNResponse } from '../types/game';
+import type { GameState, ModelInfo } from '../types/game';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
 
@@ -14,11 +14,11 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    ...init,
     headers: {
       'Content-Type': 'application/json',
       ...(init?.headers ?? {}),
     },
-    ...init,
   });
 
   if (!response.ok) {
@@ -75,33 +75,10 @@ export function resignGame(gameId: string): Promise<GameState> {
   return request<GameState>(`/api/game/${gameId}/resign`, { method: 'POST' });
 }
 
-export function aiMove(gameId: string): Promise<GameState> {
-  return request<GameState>(`/api/game/${gameId}/ai-move`, { method: 'POST' });
-}
-
 export function undoMove(gameId: string): Promise<GameState> {
   return request<GameState>(`/api/game/${gameId}/undo`, { method: 'POST' });
 }
 
 export function redoMove(gameId: string): Promise<GameState> {
   return request<GameState>(`/api/game/${gameId}/redo`, { method: 'POST' });
-}
-
-export function getNN(gameId: string): Promise<NNResponse> {
-  return request<NNResponse>(`/api/game/${gameId}/nn`);
-}
-
-export function createBattle(payload: {
-  black_model_path?: string;
-  white_model_path?: string;
-  simulations: number;
-}): Promise<BattleState> {
-  return request<BattleState>('/api/battle/new', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export function getBattle(battleId: string): Promise<BattleState> {
-  return request<BattleState>(`/api/battle/${battleId}`);
 }

@@ -1,6 +1,3 @@
-import type { HeatmapOverlay } from '../types/game';
-import { clamp } from './colors';
-
 export const BOARD_SIZE = 19;
 
 export interface BoardGeometry {
@@ -34,7 +31,6 @@ export function drawBoardScene(
   size: number,
   board: number[][],
   lastMove: number[] | null,
-  heatmap?: HeatmapOverlay | null,
 ): void {
   const { margin, cellSize, pieceRadius } = getBoardGeometry(size);
 
@@ -52,40 +48,17 @@ export function drawBoardScene(
     context.fillRect(0, index, size, 1);
   }
 
-  if (heatmap) {
-    const stats = buildHeatmapStats(heatmap.primaryMatrix, heatmap.valueMatrix);
-    for (let row = 0; row < BOARD_SIZE; row += 1) {
-      for (let col = 0; col < BOARD_SIZE; col += 1) {
-        const primary = heatmap.primaryMatrix[row]?.[col] ?? 0;
-        if (primary <= 0) {
-          continue;
-        }
-        const alpha = 255 * Math.pow(primary / stats.maxPrimary, 0.75);
-        const diff = clamp((stats.meanValue - (heatmap.valueMatrix[row]?.[col] ?? 0)) * 3 * 255, 0, 255);
-        const centerX = margin + col * cellSize;
-        const centerY = margin + row * cellSize;
-        context.fillStyle = `rgba(${diff}, ${255 - diff}, 0, ${alpha / 255})`;
-        context.beginPath();
-        context.arc(centerX, centerY, cellSize * 0.48, 0, Math.PI * 2);
-        context.fill();
-      }
-    }
-  }
-
   context.strokeStyle = 'rgba(38, 24, 7, 0.78)';
   context.lineWidth = 1.3;
+  context.beginPath();
   for (let index = 0; index < BOARD_SIZE; index += 1) {
     const linePosition = margin + index * cellSize;
-    context.beginPath();
     context.moveTo(margin, linePosition);
     context.lineTo(size - margin, linePosition);
-    context.stroke();
-
-    context.beginPath();
     context.moveTo(linePosition, margin);
     context.lineTo(linePosition, size - margin);
-    context.stroke();
   }
+  context.stroke();
 
   const starPoints = [3, 9, 15];
   context.fillStyle = '#2f1a0c';
@@ -139,6 +112,7 @@ export function drawBoardScene(
   }
 
   context.shadowBlur = 0;
+  context.shadowOffsetY = 0;
   if (lastMove && lastMove.length === 2 && lastMove[0] >= 0 && lastMove[1] >= 0) {
     const [row, col] = lastMove;
     const centerX = margin + col * cellSize;
@@ -149,30 +123,4 @@ export function drawBoardScene(
     context.arc(centerX, centerY, pieceRadius * 0.45, 0, Math.PI * 2);
     context.stroke();
   }
-}
-
-function buildHeatmapStats(primaryMatrix: number[][], valueMatrix: number[][]): {
-  maxPrimary: number;
-  meanValue: number;
-} {
-  let maxPrimary = 0;
-  let weightedValueSum = 0;
-  let weightedPrimarySum = 0;
-
-  for (let row = 0; row < BOARD_SIZE; row += 1) {
-    for (let col = 0; col < BOARD_SIZE; col += 1) {
-      const primary = primaryMatrix[row]?.[col] ?? 0;
-      const value = valueMatrix[row]?.[col] ?? 0;
-      maxPrimary = Math.max(maxPrimary, primary);
-      if (primary > 0) {
-        weightedValueSum += primary * primary * value;
-        weightedPrimarySum += primary * primary;
-      }
-    }
-  }
-
-  return {
-    maxPrimary: Math.max(maxPrimary, 1e-6),
-    meanValue: weightedPrimarySum > 0 ? weightedValueSum / weightedPrimarySum : 0,
-  };
 }

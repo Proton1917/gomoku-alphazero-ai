@@ -19,7 +19,7 @@ export function StatusBar({ eyebrow, title, items, message }: StatusBarProps) {
       </div>
       <div className="status-grid">
         {items.map((item) => (
-          <article key={`${item.label}-${item.value}`} className="status-card">
+          <article key={item.label} className="status-card">
             <span>{item.label}</span>
             <strong>{item.value}</strong>
           </article>

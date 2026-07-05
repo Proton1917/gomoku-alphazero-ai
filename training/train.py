@@ -26,7 +26,8 @@ class Config:
     num_workers = 4   # MPS下保持单进程以避免问题
     train_simulation = 50  # 增加MCTS模拟次数提升数据质量
     base_path = None
-    model_path = 'gomoku_cnn_strong'  # 新的强化训练模型路径
+    # 模型检查点目录，锚定到仓库根目录（training/ 的上一级），与运行目录无关
+    model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models', 'checkpoints')
     mcts_type = 'mean'
     output_info = True
     collect_subnode = True

@@ -3,6 +3,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { ModelSelector } from './components/ModelSelector';
 import { StatusBar } from './components/StatusBar';
 import { useGameSession } from './hooks/useGameSession';
+import { BOARD_SIZE } from './utils/boardRenderer';
 
 export default function App() {
   const game = useGameSession();
@@ -30,6 +31,8 @@ export default function App() {
               models={game.models}
               value={game.selectedModelPath}
               onChange={game.setSelectedModelPath}
+              simulations={game.selectedSimulations}
+              onSimulationsChange={game.setSelectedSimulations}
               actionLabel="创建新对局"
               onAction={game.createNewGame}
               summary="默认加载本地 KataGo 测试模型，搜索步长对应 KataGo maxVisits。"
@@ -42,6 +45,7 @@ export default function App() {
                 { label: '当前执手', value: game.summary.currentPlayer },
                 { label: '总步数', value: game.summary.moveCount },
                 { label: '搜索步数', value: game.summary.searchVisits },
+                { label: '引擎状态', value: game.summary.searchMode },
               ]}
               message={game.error}
             />
@@ -73,7 +77,6 @@ export default function App() {
               <BoardCanvas
                 board={game.game?.board ?? emptyBoard()}
                 disabled={game.loading || game.busy || game.autoplayActive}
-                heatmap={game.overlay}
                 lastMove={game.game?.last_move ?? null}
                 onCellClick={game.handleCellClick}
               />
@@ -99,5 +102,5 @@ export default function App() {
 }
 
 function emptyBoard() {
-  return Array.from({ length: 19 }, () => Array.from({ length: 19 }, () => 0));
+  return Array.from({ length: BOARD_SIZE }, () => Array.from({ length: BOARD_SIZE }, () => 0));
 }

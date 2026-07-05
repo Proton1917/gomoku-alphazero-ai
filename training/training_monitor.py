@@ -3,14 +3,24 @@
 训练监控脚本 - 监控强化训练进度并测试模型棋力
 """
 import os
+import sys
 import time
+import glob
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ai_battle 已归档到 legacy/python-scripts，仅训练监控复用其对弈函数
+sys.path.insert(0, os.path.join(REPO_ROOT, 'legacy', 'python-scripts'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import torch
 from ai_battle import play_game, Model
-import glob
+
+STRONG_MODEL_DIR = os.path.join(REPO_ROOT, 'models', 'checkpoints')
+BASELINE_MODEL = os.path.join(REPO_ROOT, 'models', 'experiments', 'model_4090_trained.pth')
 
 def check_training_progress():
     """检查训练进度"""
-    strong_model_dir = 'gomoku_cnn_strong'
+    strong_model_dir = STRONG_MODEL_DIR
     if not os.path.exists(strong_model_dir):
         print("❌ 强化训练目录不存在")
         return 0
@@ -42,7 +52,7 @@ def test_model_strength(model_path, games=10):
         new_model = Model(model_path)
         
         # 加载原始强模型
-        strong_model = Model('model_4090_trained.pth')
+        strong_model = Model(BASELINE_MODEL)
         
         wins = 0
         for i in range(games):
@@ -82,7 +92,7 @@ def main():
         if current_round > last_checked_round and current_round > 0:
             # 测试每10轮或最新轮次
             if current_round % 10 == 0 or current_round == 1:
-                model_path = f'gomoku_cnn_strong/{current_round}.pth'
+                model_path = os.path.join(STRONG_MODEL_DIR, f'{current_round}.pth')
                 if os.path.exists(model_path):
                     print(f"\n🧪 测试第{current_round}轮模型...")
                     win_rate = test_model_strength(model_path, games=5)
@@ -93,7 +103,7 @@ def main():
         # 检查是否训练完成
         if current_round >= 50:
             print("🎉 训练完成！开始最终测试...")
-            final_model = f'gomoku_cnn_strong/50.pth'
+            final_model = os.path.join(STRONG_MODEL_DIR, '50.pth')
             if os.path.exists(final_model):
                 print("🏆 最终模型棋力测试 (20局)")
                 test_model_strength(final_model, games=20)

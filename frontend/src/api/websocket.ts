@@ -21,7 +21,12 @@ export function openJsonSocket<T>(path: string, options: SocketOptions<T>): Sock
   const socket = new WebSocket(toWebSocketUrl(path));
   socket.onopen = () => options.onOpen?.();
   socket.onmessage = (event) => {
-    const payload = JSON.parse(event.data) as T;
+    let payload: T;
+    try {
+      payload = JSON.parse(event.data) as T;
+    } catch {
+      return;
+    }
     options.onMessage(payload);
   };
   socket.onerror = (event) => options.onError?.(event);
@@ -29,6 +34,11 @@ export function openJsonSocket<T>(path: string, options: SocketOptions<T>): Sock
 
   return {
     close: () => {
+      // 主动关闭属于预期操作：先摘除回调，避免触发伪错误/伪关闭事件
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
       if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close();
       }

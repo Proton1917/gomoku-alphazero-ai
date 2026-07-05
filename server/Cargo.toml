@@ -1,0 +1,18 @@
+[package]
+name = "gomoku-server"
+version = "1.0.0"
+edition = "2021"
+description = "KataGo Web API server (Rust port of the former FastAPI backend)"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting"] }
+
+[profile.release]
+lto = true

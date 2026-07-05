@@ -1,0 +1,17 @@
+# 训练环境依赖（conda base，PyTorch 走 MPS）
+# 安装：conda run -n base python -m pip install -r training/requirements.txt
+
+# 深度学习框架（Apple Silicon: PyTorch 2.0+ 已包含 MPS 支持）
+torch>=2.0.0
+torchvision>=0.15.0
+
+# 数值计算
+numpy>=1.24.0
+
+# 进度条和可视化
+tqdm>=4.64.0
+matplotlib>=3.5.0
+
+# 说明：
+# - Web 相关依赖（fastapi/uvicorn/websockets/pydantic）已随后端迁移到 Rust（server/）而移除
+# - pygame 仅旧版 GUI（legacy/python-scripts）需要，训练不依赖

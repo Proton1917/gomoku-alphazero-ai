@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   ApiError,
   createGame,
   describeError,
   getGame,
-  getNN,
   listModels,
   makeMove,
   passMove,
@@ -13,25 +12,18 @@ import {
   resignGame,
   undoMove,
 } from '../api/client';
-import { useAiMove } from './useAiMove';
-import { useAutoplay } from './useAutoplay';
-import { useResearch } from './useResearch';
-import type { AiMoveFrame, AiSide, AutoplayFrame, GameState, HeatmapOverlay, ModelInfo, ResearchFrame } from '../types/game';
-
+import { useGameStream } from './useGameStream';
+import type { AiMoveFrame, AiSide, AutoplayFrame, GameState, ModelInfo } from '../types/game';
 
 const GAME_STORAGE_KEY = 'katago:web:game-id';
 const AI_SIDE_STORAGE_KEY = 'katago:web:ai-side';
-const DEFAULT_MODEL_STORAGE_KEY = 'katago:web:default-model-path';
-const DEFAULT_SIMULATIONS_STORAGE_KEY = 'katago:web:default-visits';
 const DEFAULT_SIMULATIONS = 96;
-
+// AI 自动落子连续失败达到该次数后暂停，等待用户操作，避免重连风暴
+const MAX_AI_MOVE_FAILURES = 3;
 
 export function useGameSession() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [game, setGame] = useState<GameState | null>(null);
-  const [overlay, setOverlay] = useState<HeatmapOverlay | null>(null);
-  const [nnEnabled, setNnEnabled] = useState(false);
-  const [manualResearchEnabled, setManualResearchEnabled] = useState(false);
   const [aiSide, setAiSide] = useState<AiSide>(() => {
     const stored = window.localStorage.getItem(AI_SIDE_STORAGE_KEY);
     return stored === 'black' || stored === 'white' ? stored : 'none';
@@ -42,54 +34,16 @@ export function useGameSession() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function syncGame(nextGame: GameState) {
+  const storedGameIdRef = useRef<string | null>(null);
+  const aiMoveFailuresRef = useRef(0);
+
+  const syncGame = useCallback((nextGame: GameState) => {
     setGame(nextGame);
-    setSelectedModelPath(nextGame.model_path);
-    setSelectedSimulations(nextGame.simulations);
-    window.localStorage.setItem(GAME_STORAGE_KEY, nextGame.id);
-  }
-
-  async function restoreOrCreate(availableModels: ModelInfo[]) {
-    const fallbackModel = availableModels[0]?.path;
-    const storedDefaultModel = window.localStorage.getItem(DEFAULT_MODEL_STORAGE_KEY);
-    const storedDefaultSimulations = window.localStorage.getItem(DEFAULT_SIMULATIONS_STORAGE_KEY);
-
-    if (
-      (fallbackModel && storedDefaultModel !== fallbackModel) ||
-      storedDefaultSimulations !== String(DEFAULT_SIMULATIONS)
-    ) {
-      window.localStorage.removeItem(GAME_STORAGE_KEY);
-      const created = await createGame({ model_path: fallbackModel, simulations: DEFAULT_SIMULATIONS });
-      syncGame(created);
-      window.localStorage.setItem(DEFAULT_MODEL_STORAGE_KEY, fallbackModel);
-      window.localStorage.setItem(DEFAULT_SIMULATIONS_STORAGE_KEY, String(DEFAULT_SIMULATIONS));
-      return;
+    if (storedGameIdRef.current !== nextGame.id) {
+      storedGameIdRef.current = nextGame.id;
+      window.localStorage.setItem(GAME_STORAGE_KEY, nextGame.id);
     }
-
-    const storedId = window.localStorage.getItem(GAME_STORAGE_KEY);
-    if (storedId) {
-      try {
-        const restored = await getGame(storedId);
-        syncGame(restored);
-        if (fallbackModel) {
-          window.localStorage.setItem(DEFAULT_MODEL_STORAGE_KEY, fallbackModel);
-        }
-        window.localStorage.setItem(DEFAULT_SIMULATIONS_STORAGE_KEY, String(DEFAULT_SIMULATIONS));
-        return;
-      } catch (restoreError) {
-        if (!(restoreError instanceof ApiError && restoreError.status === 404)) {
-          setError(describeError(restoreError));
-        }
-      }
-    }
-
-    const created = await createGame({ model_path: fallbackModel, simulations: DEFAULT_SIMULATIONS });
-    syncGame(created);
-    if (fallbackModel) {
-      window.localStorage.setItem(DEFAULT_MODEL_STORAGE_KEY, fallbackModel);
-    }
-    window.localStorage.setItem(DEFAULT_SIMULATIONS_STORAGE_KEY, String(DEFAULT_SIMULATIONS));
-  }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,8 +60,14 @@ export function useGameSession() {
           setError('没有找到任何可用模型');
           return;
         }
-        setSelectedModelPath(availableModels[0].path);
-        await restoreOrCreate(availableModels);
+        const restored = await restoreOrCreate(availableModels);
+        if (cancelled) {
+          return;
+        }
+        syncGame(restored);
+        // 模型/搜索步长作为“新建对局”的草稿态，只在初始化时同步一次
+        setSelectedModelPath(restored.model_path);
+        setSelectedSimulations(restored.simulations);
       } catch (bootstrapError) {
         if (!cancelled) {
           setError(describeError(bootstrapError));
@@ -123,162 +83,87 @@ export function useGameSession() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [syncGame]);
 
   useEffect(() => {
     window.localStorage.setItem(AI_SIDE_STORAGE_KEY, aiSide);
   }, [aiSide]);
 
-  const research = useResearch(
-    game?.id ?? null,
-    (frame: ResearchFrame) => {
-      syncGame(frame.game);
-      if (manualResearchEnabled) {
-        setOverlay({
-          kind: 'research',
-          primaryLabel: 'Visit',
-          secondaryLabel: 'Value',
-          primaryMatrix: frame.visit_matrix,
-          valueMatrix: frame.value_matrix,
-          visitCount: frame.visit_count,
-          value: frame.value,
-        });
-      } else if (overlay?.kind === 'research') {
-        setOverlay(null);
-      }
+  const autoplay = useGameStream<AutoplayFrame>(
+    game ? `/ws/game/${game.id}/autoplay` : null,
+    '自动对弈连接失败',
+    {
+      onFrame: (frame) => syncGame(frame.game),
+      onError: (message) => setError(message),
     },
-    (message) => setError(message),
   );
 
-  const autoplay = useAutoplay(
-    game?.id ?? null,
-    (frame: AutoplayFrame) => {
-      syncGame(frame.game);
-      if (frame.done) {
-        setOverlay(null);
-      }
-    },
-    (message) => setError(message),
-  );
-
-  const aiMoveSearch = useAiMove(
-    game?.id ?? null,
-    (frame: AiMoveFrame) => {
-      syncGame(frame.game);
-      if (!frame.done) {
-        setOverlay({
-          kind: 'research',
-          primaryLabel: 'Visit',
-          secondaryLabel: 'Value',
-          primaryMatrix: frame.visit_matrix,
-          valueMatrix: frame.value_matrix,
-          visitCount: frame.visit_count,
-          value: frame.value,
-        });
-      } else {
-        setOverlay(null);
-      }
-    },
-    (message) => setError(message),
-  );
-
-  useEffect(() => {
-    if (!manualResearchEnabled && overlay?.kind === 'research') {
-      setOverlay(null);
-    }
-  }, [manualResearchEnabled, overlay?.kind]);
-
-  const isAITurn =
-    !!game &&
-    aiSide !== 'none' &&
-    game.status === 'active' &&
-    ((aiSide === 'black' && game.current_player === 1) || (aiSide === 'white' && game.current_player === -1));
-
-  const shouldAutoPonder = false;
-
-  useEffect(() => {
-    if (!game || game.status !== 'active' || busy || loading || autoplay.active || aiMoveSearch.active) {
-      if (research.active) {
-        research.stop();
-      }
-      return;
-    }
-
-    if (manualResearchEnabled || shouldAutoPonder) {
-      research.start();
-      return;
-    }
-
-    if (research.active) {
-      research.stop();
-    }
-  }, [
-    autoplay.active,
-    aiMoveSearch.active,
-    busy,
-    game?.id,
-    game?.status,
-    loading,
-    manualResearchEnabled,
-    research,
-    shouldAutoPonder,
-  ]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function refreshNNOverlay() {
-      if (!game || !nnEnabled || research.active || autoplay.active || aiMoveSearch.active) {
-        if (!nnEnabled && overlay?.kind === 'nn') {
-          setOverlay(null);
-        }
-        return;
-      }
-
-      try {
-        const result = await getNN(game.id);
-        if (cancelled) {
+  const aiMove = useGameStream<AiMoveFrame>(
+    game ? `/ws/game/${game.id}/ai-move` : null,
+    'AI 搜索连接失败',
+    {
+      onFrame: (frame) => syncGame(frame.game),
+      onError: (message) => setError(message),
+      onEnd: (receivedDone) => {
+        if (receivedDone) {
+          aiMoveFailuresRef.current = 0;
           return;
         }
-        setOverlay({
-          kind: 'nn',
-          primaryLabel: 'Prob',
-          secondaryLabel: 'Value',
-          primaryMatrix: result.policy_matrix,
-          valueMatrix: result.value_matrix,
-        });
-      } catch (nnError) {
-        if (!cancelled) {
-          setError(describeError(nnError));
+        aiMoveFailuresRef.current += 1;
+        if (aiMoveFailuresRef.current === MAX_AI_MOVE_FAILURES) {
+          setError('AI 落子连续失败，已暂停自动落子；请检查后端服务后重试');
         }
+      },
+    },
+  );
+
+  // AI 执黑/执白时轮到 AI 自动落子
+  useEffect(() => {
+    if (
+      !game ||
+      loading ||
+      busy ||
+      autoplay.active ||
+      aiMove.active ||
+      game.status !== 'active' ||
+      aiSide === 'none'
+    ) {
+      return;
+    }
+    if ((aiSide === 'black' && game.current_player !== 1) || (aiSide === 'white' && game.current_player !== -1)) {
+      return;
+    }
+    if (aiMoveFailuresRef.current >= MAX_AI_MOVE_FAILURES) {
+      return;
+    }
+    aiMove.start();
+  }, [aiMove, aiSide, autoplay.active, busy, game, loading]);
+
+  // 切换 AI 侧或换对局时清除失败计数
+  useEffect(() => {
+    aiMoveFailuresRef.current = 0;
+  }, [aiSide, game?.id]);
+
+  async function restoreOrCreate(availableModels: ModelInfo[]): Promise<GameState> {
+    const storedId = window.localStorage.getItem(GAME_STORAGE_KEY);
+    if (storedId) {
+      try {
+        return await getGame(storedId);
+      } catch (restoreError) {
+        if (!(restoreError instanceof ApiError && restoreError.status === 404)) {
+          throw restoreError;
+        }
+        window.localStorage.removeItem(GAME_STORAGE_KEY);
       }
     }
+    return createGame({ model_path: availableModels[0]?.path, simulations: DEFAULT_SIMULATIONS });
+  }
 
-    void refreshNNOverlay();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    autoplay.active,
-    aiMoveSearch.active,
-    game?.current_player,
-    game?.history_index,
-    game?.id,
-    game?.status,
-    nnEnabled,
-    overlay?.kind,
-    research.active,
-  ]);
-
-  async function runGameAction(action: () => Promise<GameState>, clearOverlay = true) {
+  async function runGameAction(action: () => Promise<GameState>) {
     setBusy(true);
     setError(null);
     try {
-      const nextGame = await action();
-      syncGame(nextGame);
-      if (clearOverlay) {
-        setOverlay(null);
-      }
+      syncGame(await action());
     } catch (actionError) {
       setError(describeError(actionError));
     } finally {
@@ -294,131 +179,81 @@ export function useGameSession() {
     await runGameAction(() => createGame({ model_path: selectedModelPath, simulations: selectedSimulations }));
   }
 
+  function isHumanBlocked(): boolean {
+    return (
+      !game ||
+      busy ||
+      autoplay.active ||
+      aiMove.active ||
+      game.status !== 'active' ||
+      (aiSide === 'black' && game.current_player === 1) ||
+      (aiSide === 'white' && game.current_player === -1)
+    );
+  }
+
   async function handleCellClick(row: number, col: number) {
-    if (!game || busy || autoplay.active || aiMoveSearch.active || game.status !== 'active') {
+    if (isHumanBlocked() || game!.board[row]?.[col] !== 0) {
       return;
     }
-    if ((aiSide === 'black' && game.current_player === 1) || (aiSide === 'white' && game.current_player === -1)) {
-      return;
-    }
-    if (game.board[row]?.[col] !== 0) {
-      return;
-    }
-    await runGameAction(() => makeMove(game.id, row, col));
+    await runGameAction(() => makeMove(game!.id, row, col));
   }
 
   async function handleAIMove() {
-    if (!game || aiMoveSearch.active) {
+    if (!game || aiMove.active || autoplay.active || busy || game.status !== 'active') {
       return;
-    }
-    if (research.active) {
-      research.stop();
     }
     setError(null);
-    setOverlay(null);
-    aiMoveSearch.start();
+    aiMoveFailuresRef.current = 0;
+    aiMove.start();
   }
 
-  useEffect(() => {
-    if (
-      !game ||
-      loading ||
-      busy ||
-      autoplay.active ||
-      aiMoveSearch.active ||
-      research.active ||
-      game.status !== 'active' ||
-      aiSide === 'none'
-    ) {
-      return;
-    }
-
-    if ((aiSide === 'black' && game.current_player !== 1) || (aiSide === 'white' && game.current_player !== -1)) {
-      return;
-    }
-
-    aiMoveSearch.start();
-  }, [
-    aiSide,
-    autoplay.active,
-    aiMoveSearch.active,
-    busy,
-    game?.current_player,
-    game?.history_index,
-    game?.id,
-    game?.status,
-    loading,
-    research.active,
-  ]);
-
   async function handleUndo() {
-    if (!game) {
+    if (!game || busy || autoplay.active || aiMove.active || !game.can_undo) {
       return;
     }
-    await runGameAction(() => undoMove(game.id));
+    const gameId = game.id;
+    await runGameAction(async () => {
+      let next = await undoMove(gameId);
+      if (aiSide !== 'none') {
+        // AI 对弈模式：连撤到轮到人类为止，否则 AI 会立刻把刚撤销的手下回来
+        const aiPlayer = aiSide === 'black' ? 1 : -1;
+        while (next.can_undo && next.status === 'active' && next.current_player === aiPlayer) {
+          next = await undoMove(gameId);
+        }
+      }
+      return next;
+    });
   }
 
   async function handleRedo() {
-    if (!game) {
+    if (!game || busy || autoplay.active || aiMove.active || !game.can_redo) {
       return;
     }
     await runGameAction(() => redoMove(game.id));
   }
 
   async function handlePass() {
-    if (!game || busy || autoplay.active || aiMoveSearch.active || game.status !== 'active') {
+    if (isHumanBlocked()) {
       return;
     }
-    if ((aiSide === 'black' && game.current_player === 1) || (aiSide === 'white' && game.current_player === -1)) {
-      return;
-    }
-    await runGameAction(() => passMove(game.id));
+    await runGameAction(() => passMove(game!.id));
   }
 
   async function handleResign() {
-    if (!game || busy || autoplay.active || aiMoveSearch.active || game.status !== 'active') {
+    if (isHumanBlocked()) {
       return;
     }
-    if ((aiSide === 'black' && game.current_player === 1) || (aiSide === 'white' && game.current_player === -1)) {
-      return;
-    }
-    await runGameAction(() => resignGame(game.id));
-  }
-
-  async function toggleNN() {
-    if (!game || busy || research.active || autoplay.active || aiMoveSearch.active) {
-      return;
-    }
-    if (nnEnabled) {
-      setNnEnabled(false);
-      setOverlay(null);
-      return;
-    }
-    if (game.status !== 'active') {
-      return;
-    }
-    setError(null);
-    setNnEnabled(true);
-  }
-
-  function toggleResearch() {
-    setManualResearchEnabled(false);
-    setOverlay(null);
+    await runGameAction(() => resignGame(game!.id));
   }
 
   function toggleAutoplay() {
-    if (aiMoveSearch.active) {
+    if (aiMove.active) {
       return;
-    }
-    if (manualResearchEnabled) {
-      setManualResearchEnabled(false);
-      setOverlay(null);
     }
     if (autoplay.active) {
       autoplay.stop();
       return;
     }
-    setOverlay(null);
     autoplay.start();
   }
 
@@ -426,23 +261,20 @@ export function useGameSession() {
     currentPlayer: describeCurrentPlayer(game),
     moveCount: String(game?.history_index !== undefined ? game.history_index + 1 : 0),
     searchVisits: String(game?.search_visits ?? 0),
-    searchMode: aiMoveSearch.active ? 'KataGo 思考中' : autoplay.active ? '自动对弈中' : '等待操作',
+    searchMode: aiMove.active ? 'KataGo 思考中' : autoplay.active ? '自动对弈中' : '等待操作',
   };
 
   return {
     models,
     game,
-    overlay,
     aiSide,
     selectedModelPath,
     selectedSimulations,
     loading,
-    busy: busy || aiMoveSearch.active,
+    busy: busy || aiMove.active,
     error,
-    researchActive: manualResearchEnabled,
     autoplayActive: autoplay.active,
-    aiMoveActive: aiMoveSearch.active,
-    showNNActive: nnEnabled,
+    aiMoveActive: aiMove.active,
     setAiSide,
     setSelectedModelPath,
     setSelectedSimulations,
@@ -453,9 +285,7 @@ export function useGameSession() {
     handleResign,
     handleUndo,
     handleRedo,
-    toggleResearch,
     toggleAutoplay,
-    toggleNN,
     summary,
   };
 }

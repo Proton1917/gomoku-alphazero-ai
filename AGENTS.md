@@ -4,294 +4,96 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Gomoku (五子棋) AI using AlphaZero-style MCTS + ResNet CNN on a 15x15 board.
+Two co-existing subsystems:
 
-## 2026-05-10 KataGo GUI Mode
+1. **KataGo Web GUI**（当前主用途）— 19 路围棋对局台。Rust 后端（`server/`，axum）驱动本机 Metal 版 KataGo（GTP 子进程），React 前端（`frontend/`）Canvas 棋盘。
+2. **Gomoku AlphaZero training**（保留）— `training/train.py`，15 路五子棋 MCTS + ResNet CNN。
 
-This repository's web UI is currently repurposed as a local KataGo GUI:
-- The React canvas board is now **19x19**.
-- The FastAPI backend discovers and uses the sibling KataGo build at `../KataGo/cpp/build-metal/katago`.
-- Default model path: `../KataGo/cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz`.
-- `backend/katago_runtime.py` launches KataGo in GTP mode with `maxVisits` mapped from the UI search step value.
-- `backend/go_rules.py` handles basic Go legality for the GUI board state: placement, captures, suicide prevention, pass, and two-pass finish.
-- Play flow verified through HTTP and browser UI: create game, human move, KataGo AI move, and manual canvas move.
+## 2026-07-05 重构记录
 
-Current run commands:
-```bash
-./KataGo_GUI.command
-# or
-./start_project.command
-
-cd backend && conda run -n base uvicorn main:app --host 127.0.0.1 --port 8000
-cd frontend && npm run dev -- --host 127.0.0.1 --port 5173
-```
-
-Rule coverage added for real play:
-- Captures and suicide prevention.
-- Positional superko / ko repeat prevention.
-- Pass and resignation.
-- Area scoring after two consecutive passes with 6.5 komi.
-- Frontend exposes `AI 落子`, `自动对弈`, `停一手`, `认输`, `悔棋`, and `前进`.
-
-If this GUI is connected to an external online platform later, keep `backend/go_rules.py` as the legality gate before submitting moves to that platform.
-
-Verification commands used:
-```bash
-conda run -n base python -m py_compile backend/*.py
-cd frontend && npm run build
-```
-
-The older 15x15 Gomoku / AlphaZero notes below are retained for legacy training code and older entrypoints, but they no longer describe the default web GUI behavior.
-
-The repository now contains:
-- Web play UI (`FastAPI + React/Vite`)
-- Web model-vs-model battle UI
-- Legacy `pygame` play/battle entrypoints
-- Training and training-monitor scripts
-- Local benchmark/evaluation scripts for comparing saved models
-
-## Current Status Snapshot
-
-- **Current default model**: `gomoku_cnn_strong/55.pth`
-- **Official retained model pool**: `46.pth`, `48.pth`, `49.pth`, `50.pth`, `55.pth`
-- **Default UI simulations**: `500`
-- **Training target rounds**: `Config.total_rounds = 80` in `train.py`
-- **Quick launcher**: `start_project.command`
-- **Experimental training artifacts**:
-  - `gomoku_cnn_probe_fast/`
-  - `gomoku_cnn_probe_ultrafast/`
-- **Benchmark outputs**:
-  - `benchmark_recent_45_50.json`
-  - `benchmark_finalists_46_48_49_50.json`
-  - `round55_vs_all.json`
-  - `ultrafast_training_eval.json`
+- 后端由 Python FastAPI **完整迁移到 Rust**（`server/`），接口与 JSON 结构 1:1 兼容；原 Python 后端归档于 `legacy/python-backend/`。
+- 非训练 Python 脚本全部归档到 `legacy/python-scripts/`（game_gui、model_battle、ai_battle、benchmark_models、search_runtime、online_refine_*、rapfi_budget_round_robin）。
+- 目录重命名：`gomoku_cnn_strong/` → `models/checkpoints/`，`gomoku_cnn_4090_test/` → `models/experiments/`，`AlphaGomoku/` → `engines/alpha-gomoku/`，`Rapfi-engine/` → `engines/rapfi/`，`rapfi-250615/` → `engines/rapfi-src/`。
+- SQLite 移到 `data/gomoku_web.sqlite3`（表结构不变，旧数据已迁移）。
+- 前端修复：WebSocket 句柄身份校验（防旧连接迟到事件污染新连接）、AI 自动落子失败退避（连续 3 次失败暂停）、AI 模式悔棋连撤到人类回合、模型/步长选择改为草稿态不被服务器响应覆写、会话恢复以 `getGame` 成功为准；删除死代码（useResearch、BattlePage、NN 热图、colors.ts）。
 
 ## Commands
 
 ```bash
-# Quick start: launch backend + frontend together
-./start_project.command
+# 一键启动前后端（缺后端二进制时自动 cargo build --release）
+./scripts/start_project.command
 
-# Start the web backend API
-cd backend && conda run -n base uvicorn main:app --reload
+# Rust 后端
+cd server && cargo build --release && cargo test
+GOMOKU_REPO_ROOT=$(pwd) ./server/target/release/gomoku-server   # 从仓库根运行
 
-# Start the web frontend dev server
-cd frontend && npm run dev
+# 前端
+cd frontend && npm install && npm run dev    # 开发 127.0.0.1:5173
+cd frontend && npm run build                 # tsc -b && vite build
 
-# Build the frontend
-cd frontend && npm run build
-
-# Continue training from latest checkpoint up to Config.total_rounds
-conda run -n base python train.py
-
-# Monitor training progress
-conda run -n base python training_monitor.py
-
-# Benchmark saved models
-conda run -n base python benchmark_models.py --rounds 49,50,55 --simulations 12 --games-per-side 2
-
-# Legacy: Run pygame GUI
-conda run -n base python game_gui.py
-
-# Legacy: Run pygame model battle GUI
-conda run -n base python model_battle.py
-```
-
-## Repository Layout
-
-```text
-Gomoku/
-├── train.py
-├── backend/
-├── frontend/
-├── game_gui.py
-├── model_battle.py
-├── ai_battle.py
-├── benchmark_models.py
-├── training_monitor.py
-├── start_project.command
-├── gomoku_cnn_strong/
-├── gomoku_cnn_probe_fast/
-├── gomoku_cnn_probe_ultrafast/
-└── README.md
+# 训练（Python 仅剩这里）
+conda run -n base python training/train.py
+conda run -n base python training/training_monitor.py
 ```
 
 ## Architecture
 
-### Core Module: `train.py`
-This is still the central module imported by the backend, legacy GUIs, and benchmark scripts. It contains:
-- **`ValueCNN`** — 3-channel input ResNet-like policy/value network
-- **`MCTS`** — serial tree search implementation
-- **`Config`** — training hyperparameters, now including `total_rounds`
-- **`Model`** — wrapper for inference-time MCTS calls
-- **`board_to_tensor()`**
-- **`evaluation_func()`**
-- **`generate_selfplay_data()`**
-- **`show_nn()`**
+### Rust backend (`server/src/`)
 
-### Board Representation
-- `1` = current player
-- `-1` = opponent
-- `0` = empty
-- After each move in search/self-play, the board is negated to swap perspective
-- Global `board_size = 15`
+| 模块 | 职责 |
+|------|------|
+| `main.rs` | axum 应用、CORS（5173/4173）、`/healthz`、监听 127.0.0.1:8000 |
+| `config.rs` | 路径解析与模型发现；env：`GOMOKU_REPO_ROOT` / `KATAGO_ROOT` / `GOMOKU_DB_PATH` / `GOMOKU_SERVER_ADDR` |
+| `rules.rs` | 围棋规则：提子、禁自杀、区域数子（贴目 6.5）、`board_key` 同形键 |
+| `katago.rs` | KataGo GTP 子进程：惰性启动、每次落子前 `clear_board` + 重放手顺、`genmove`；stderr 合流 stdout |
+| `session.rs` | Game/Battle 会话、undo/redo（history_index 截断重放）、全局同形拒手、stream generation/revision 失效机制 |
+| `db.rs` | rusqlite（bundled）、WAL、与原 Python 相同的表结构与 JSON 列编码 |
+| `api.rs` | REST `/api/*`；错误体 `{"detail": "..."}` 与 FastAPI 一致 |
+| `ws.rs` | WebSocket `/ws/*`；done 帧后服务端关闭；会话缺失关闭码 4404 |
 
-### Model Files
-- Official kept models live in `gomoku_cnn_strong/`
-- Current retained rounds: `46`, `48`, `49`, `50`, `55`
-- Discovery / default ordering is:
-  1. `55`
-  2. `50`
-  3. `49`
-  4. `48`
-  5. `46`
-- `55` was promoted into the official pool from the ultrafast probe experiments and is currently the default model for UI sessions
+关键语义（移植自原 Python，勿破坏）：
+- 落子 `[-1,-1]`=pass、`[-2,-2]`=resign；棋子 1=黑、-1=白。
+- 会话状态 JSON 字段名/结构必须与前端 `types/game.ts` 保持一致。
+- 引擎调用在 `spawn_blocking` 中执行，会话锁（tokio Mutex）在整个操作期间持有。
+- research/nn 端点返回零矩阵（KataGo 直连引擎不提供逐点 NN 概览），前端已删除对应 UI。
 
-### Device Pattern
-Used consistently across the codebase:
-```python
-if torch.cuda.is_available():
-    device = torch.device('cuda')
-elif torch.backends.mps.is_available():
-    device = torch.device('mps')
-else:
-    device = torch.device('cpu')
-```
+### Frontend (`frontend/src/`)
 
-Important implications:
-- On Apple Silicon / `mps`, **tree search logic still runs on CPU**, while neural-network forward passes run on `mps`
-- Self-play generation uses **single-process mode on MPS**
-- CUDA paths use multiprocessing for self-play generation
+| 文件 | 职责 |
+|------|------|
+| `hooks/useGameSession.ts` | 全部对局状态与操作；AI 自动落子 effect（带失败退避）；AI 模式悔棋连撤 |
+| `hooks/useGameStream.ts` | autoplay/ai-move 共用的 WS 流 hook；所有回调校验句柄身份 |
+| `api/client.ts` / `api/websocket.ts` | REST / WS 封装；`close()` 先摘除回调再关闭 |
+| `components/BoardCanvas.tsx` | Canvas 棋盘；位图尺寸设置与重绘分离在两个 effect |
+| `utils/boardRenderer.ts` | 绘制；`BOARD_SIZE = 19` 单一出处 |
 
-## Web Backend
+localStorage 键：`katago:web:game-id`、`katago:web:ai-side`。
 
-### Tech Stack
-- **Backend API**: FastAPI
-- **Persistence**: SQLite (`backend/gomoku_web.sqlite3`)
-- **Concurrency model**: async routes + `asyncio.to_thread()` around CPU-heavy MCTS calls
+### Training (`training/`)
 
-### Backend Files
-| File | Purpose |
-|------|---------|
-| `backend/main.py` | FastAPI app, CORS, route mounting |
-| `backend/api_routes.py` | REST endpoints |
-| `backend/ws_routes.py` | WebSocket endpoints |
-| `backend/game_service.py` | Session managers, in-memory MCTS roots, SQLite persistence |
-| `backend/models_service.py` | Model discovery and default ordering |
-| `backend/db.py` | SQLite schema and persistence helpers |
-| `backend/schemas.py` | Pydantic request/response models |
+- `train.py`：`ValueCNN`、`MCTS`、`Config`（`total_rounds = 80`）、自对弈与训练循环；`Config.model_path` 锚定 `<repo>/models/checkpoints`，续训自动从最高轮次检查点恢复。
+- `training_monitor.py`：监控 + 对弈测试；从 `legacy/python-scripts/ai_battle.py` 导入对弈函数（sys.path 注入）。
+- 设备选择：cuda → mps → cpu；MPS 下自对弈单进程、树搜索在 CPU。
+- 模型池：`models/checkpoints/{46,48,49,50,55}.pth`，默认 55。
 
-### REST Endpoints
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/models` | List available models |
-| POST | `/api/game/new` | Create play session |
-| GET | `/api/game/{id}` | Restore play session |
-| POST | `/api/game/{id}/move` | Human move |
-| POST | `/api/game/{id}/ai-move` | Single AI move |
-| POST | `/api/game/{id}/undo` | Undo |
-| POST | `/api/game/{id}/redo` | Redo |
-| GET | `/api/game/{id}/nn` | NN policy/value overlay |
-| POST | `/api/battle/new` | Create battle session |
-| GET | `/api/battle/{id}` | Restore battle session |
+### Models & engines
 
-### WebSockets
-| Path | Description |
-|------|-------------|
-| `/ws/game/{id}/research` | Streams visit/value matrices every 10 simulations |
-| `/ws/game/{id}/autoplay` | AI-vs-AI autoplay |
-| `/ws/battle/{id}` | Model-vs-model battle stream |
+- `models/model_4090_trained.pth` 是指向 `experiments/model_4090_trained.pth` 的符号链接。
+- `engines/` 整个目录不入库（第三方引擎与源码树）。
+- `*.pth`、`*.bin.gz`、`data/` 均被 .gitignore 排除。
 
-## Web Frontend
+## Verification
 
-### Tech Stack
-- React
-- TypeScript
-- Vite
-- HTML Canvas board rendering
-
-### Frontend Files
-| File | Purpose |
-|------|---------|
-| `frontend/src/api/client.ts` | REST client |
-| `frontend/src/api/websocket.ts` | WebSocket helper |
-| `frontend/src/types/game.ts` | Shared frontend types |
-| `frontend/src/hooks/useGameSession.ts` | Play session state + UI logic |
-| `frontend/src/hooks/useResearch.ts` | Research WebSocket hook |
-| `frontend/src/hooks/useAutoplay.ts` | Autoplay WebSocket hook |
-| `frontend/src/components/BoardCanvas.tsx` | Canvas board / heatmap / hover tooltip |
-| `frontend/src/components/ControlPanel.tsx` | Play controls |
-| `frontend/src/components/ModelSelector.tsx` | Model + simulation controls |
-| `frontend/src/components/StatusBar.tsx` | Status cards |
-| `frontend/src/components/BattlePage.tsx` | Battle UI |
-| `frontend/src/utils/boardRenderer.ts` | Canvas drawing helpers |
-| `frontend/src/utils/colors.ts` | Heatmap colors |
-
-### Current Frontend Behavior
-- Default play session starts from model `55` and `500` simulations
-- Existing sessions are restored from backend + `localStorage`
-- If the frontend default model or default simulation count changes, old persisted session IDs are invalidated and a new session is created automatically
-- `NN` overlay is now a **persistent toggle**: after a move, it recomputes for the new board instead of disappearing
-- Play page includes a **“谁是电脑”** selector:
-  - `双方手动`
-  - `电脑执黑`
-  - `电脑执白`
-- Battle layout was fixed so the board area uses the full main content region instead of being squeezed into the left grid column
-
-## Legacy GUI Notes
-
-`game_gui.py` and `model_battle.py` are still supported.
-
-Current legacy behavior:
-- They reuse the same model discovery order as the backend
-- Hitting Enter on model selection chooses the current default model (`55`)
-- The `pygame` GUI keeps `NN` as a persistent toggle and recomputes it after moves
-
-## Training Notes
-
-- `train.py` now supports continuing past round 50 through `Config.total_rounds`
-- Current default target is `80`
-- Running `train.py` resumes automatically from the highest numbered checkpoint in `Config.model_path`
-- On this codebase and hardware profile, full-strength training rounds can be slow on MPS; quick probe directories were used for shorter continuation experiments
-
-## Benchmark / Evaluation Notes
-
-### `benchmark_models.py`
-Use this for round-robin comparisons among saved `.pth` models.
-
-Useful options:
-- `--rounds 49,50,55`
-- `--min-round / --max-round`
-- `--simulations`
-- `--games-per-side`
-- `--output-json`
-
-### Known Evaluation Caveats
-- Strong **first-move advantage** still affects small-sample results
-- `55` is the current default because it performed well enough to promote, but it did **not** cleanly dominate every retained model in every short benchmark
-- Short probe-trained models in `gomoku_cnn_probe_ultrafast/` are experimental, not official defaults
-
-## Dependencies
-
-### Python
-- torch
-- torchvision
-- numpy
-- pygame
-- tqdm
-- matplotlib
-- fastapi
-- uvicorn
-- websockets
-- pydantic
-
-Install via:
 ```bash
-conda run -n base python -m pip install -r requirements.txt
+cd server && cargo test                     # 规则/GTP 坐标/重放 单元测试
+cd frontend && npm run build                # 类型检查 + 构建
+conda run -n base python -m py_compile training/*.py
 ```
 
-### Frontend
-Install via:
-```bash
-cd frontend && npm install
-```
+集成冒烟：起 `gomoku-server` + `vite preview`，浏览器验证建局/落子/悔棋/AI 落子（KataGo Metal 实测 8 visits 约 1.7s/手）。
+
+## Known Caveats
+
+- KataGo 每会话一个 GTP 进程，首次 `genmove` 前有 Metal 初始化延迟。
+- 评估存在先手优势，短基准样本小；55 号模型是默认但并非全面碾压池内其他模型。
+- `legacy/` 内脚本的相对路径基于旧目录结构，复活需改路径（见 `legacy/README.md`）。
