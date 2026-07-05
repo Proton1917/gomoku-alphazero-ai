@@ -34,6 +34,8 @@ export interface GameState {
   simulations: number;
   last_move: number[] | null;
   search_visits: number;
+  search_millis: number;
+  visits_per_second: number;
   can_undo: boolean;
   can_redo: boolean;
   score: ScoreState | null;

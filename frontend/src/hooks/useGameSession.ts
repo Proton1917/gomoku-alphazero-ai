@@ -260,7 +260,8 @@ export function useGameSession() {
   const summary = {
     currentPlayer: describeCurrentPlayer(game),
     moveCount: String(game?.history_index !== undefined ? game.history_index + 1 : 0),
-    searchVisits: String(game?.search_visits ?? 0),
+    searchVisits: describeSearchVisits(game),
+    searchPower: describeSearchPower(game),
     searchMode: aiMove.active ? 'KataGo 思考中' : autoplay.active ? '自动对弈中' : '等待操作',
   };
 
@@ -288,6 +289,23 @@ export function useGameSession() {
     toggleAutoplay,
     summary,
   };
+}
+
+function describeSearchVisits(game: GameState | null): string {
+  if (!game || game.search_visits <= 0) {
+    return '—';
+  }
+  const seconds = game.search_millis > 0 ? ` / ${(game.search_millis / 1000).toFixed(1)}s` : '';
+  return `${game.search_visits}${seconds}`;
+}
+
+function describeSearchPower(game: GameState | null): string {
+  if (!game || game.visits_per_second <= 0) {
+    return '—';
+  }
+  const vps = game.visits_per_second;
+  const label = vps >= 1000 ? `${(vps / 1000).toFixed(2)}k` : String(vps);
+  return `${label} visits/s`;
 }
 
 function describeCurrentPlayer(game: GameState | null): string {

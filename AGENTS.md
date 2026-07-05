@@ -45,7 +45,7 @@ conda run -n base python training/training_monitor.py
 | `main.rs` | axum 应用、CORS（5173/4173）、`/healthz`、监听 127.0.0.1:8000 |
 | `config.rs` | 路径解析与模型发现；env：`GOMOKU_REPO_ROOT` / `KATAGO_ROOT` / `GOMOKU_DB_PATH` / `GOMOKU_SERVER_ADDR` |
 | `rules.rs` | 围棋规则：提子、禁自杀、区域数子（贴目 6.5）、`board_key` 同形键 |
-| `katago.rs` | KataGo GTP 子进程：惰性启动、每次落子前 `clear_board` + 重放手顺、`genmove`；stderr 合流 stdout |
+| `katago.rs` | KataGo GTP 子进程：惰性启动、每次落子前 `clear_board` + 重放手顺、`kata-genmove_analyze`（解析 rootInfo 真实 visits，老版本回退 `genmove`）；stderr 合流 stdout |
 | `session.rs` | Game/Battle 会话、undo/redo（history_index 截断重放）、全局同形拒手、stream generation/revision 失效机制 |
 | `db.rs` | rusqlite（bundled）、WAL、与原 Python 相同的表结构与 JSON 列编码 |
 | `api.rs` | REST `/api/*`；错误体 `{"detail": "..."}` 与 FastAPI 一致 |
@@ -56,6 +56,7 @@ conda run -n base python training/training_monitor.py
 - 会话状态 JSON 字段名/结构必须与前端 `types/game.ts` 保持一致。
 - 引擎调用在 `spawn_blocking` 中执行，会话锁（tokio Mutex）在整个操作期间持有。
 - research/nn 端点返回零矩阵（KataGo 直连引擎不提供逐点 NN 概览），前端已删除对应 UI。
+- `search_visits` 是 `kata-genmove_analyze` rootInfo 的**真实**访问数（可能略超 maxVisits，KataGo 按批完成）；`search_millis` 只计 genmove 耗时（不含重放手顺），`visits_per_second` 即 GPU 算力（前端「GPU 算力」卡）。
 
 ### Frontend (`frontend/src/`)
 

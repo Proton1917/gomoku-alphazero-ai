@@ -140,6 +140,15 @@ fn position_keys(moves: &[MoveRecord]) -> HashSet<String> {
     keys
 }
 
+/// 真实搜索算力（visits/s），保留一位小数；无搜索记录时为 0
+fn visits_per_second(visits: u32, millis: u64) -> f64 {
+    if millis == 0 || visits == 0 {
+        return 0.0;
+    }
+    let vps = visits as f64 / (millis as f64 / 1000.0);
+    (vps * 10.0).round() / 10.0
+}
+
 fn zero_matrix() -> Value {
     json!(vec![vec![0.0f32; BOARD_SIZE]; BOARD_SIZE])
 }
@@ -273,11 +282,11 @@ impl GameSession {
     }
 
     pub fn to_state(&self) -> Value {
-        let search_visits = self
+        let (search_visits, search_millis) = self
             .engine
             .lock()
-            .map(|engine| engine.last_search_visits)
-            .unwrap_or(0);
+            .map(|engine| (engine.last_search_visits, engine.last_search_millis))
+            .unwrap_or((0, 0));
         json!({
             "id": self.id,
             "board": self.board,
@@ -290,6 +299,8 @@ impl GameSession {
             "simulations": self.simulations,
             "last_move": self.last_move,
             "search_visits": search_visits,
+            "search_millis": search_millis,
+            "visits_per_second": visits_per_second(search_visits, search_millis),
             "can_undo": self.history_index >= 0,
             "can_redo": self.history_index < self.move_history.len() as i64 - 1,
             "score": score_for_state(&self.status, &self.board, &self.last_move),

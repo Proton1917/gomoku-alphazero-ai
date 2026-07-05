@@ -45,6 +45,7 @@ export default function App() {
                 { label: '当前执手', value: game.summary.currentPlayer },
                 { label: '总步数', value: game.summary.moveCount },
                 { label: '搜索步数', value: game.summary.searchVisits },
+                { label: 'GPU 算力', value: game.summary.searchPower },
                 { label: '引擎状态', value: game.summary.searchMode },
               ]}
               message={game.error}

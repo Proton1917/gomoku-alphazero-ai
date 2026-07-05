@@ -19,7 +19,12 @@ pub struct KataGoProcess {
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     output_rx: Option<Receiver<String>>,
+    /// 上一手的真实搜索访问数（来自 kata-genmove_analyze 的 rootInfo）
     pub last_search_visits: u32,
+    /// 上一手搜索耗时（毫秒），用于计算 visits/s 算力
+    pub last_search_millis: u64,
+    /// KataGo 是否支持 kata-genmove_analyze（老版本回退 genmove）
+    analyze_supported: bool,
 }
 
 impl KataGoProcess {
@@ -31,6 +36,8 @@ impl KataGoProcess {
             stdin: None,
             output_rx: None,
             last_search_visits: 0,
+            last_search_millis: 0,
+            analyze_supported: true,
         }
     }
 
@@ -42,9 +49,30 @@ impl KataGoProcess {
         self.ensure_running()?;
         self.load_position(move_history)?;
         let color = if current_player == 1 { "B" } else { "W" };
-        let response = self.command(&format!("genmove {color}"), Duration::from_secs(120))?;
-        let mv = parse_gtp_move(response.trim())?;
-        self.last_search_visits = self.max_visits;
+
+        let started = Instant::now();
+        let (mv, visits) = if self.analyze_supported {
+            // kata-genmove_analyze 流式输出分析行，最后一行 play <move>；
+            // rootInfo 携带根节点真实 visits。interval 100 = 每 1s 一帧，控制流量。
+            let command = format!("kata-genmove_analyze {color} interval 100 rootInfo true");
+            match self.command(&command, Duration::from_secs(120)) {
+                Ok(response) => parse_analyze_response(&response)?,
+                Err(e) if e.contains("拒绝命令") => {
+                    // 老版本 KataGo 不认识该命令：本会话内永久回退到 genmove
+                    self.analyze_supported = false;
+                    let response =
+                        self.command(&format!("genmove {color}"), Duration::from_secs(120))?;
+                    (parse_gtp_move(response.trim())?, self.max_visits)
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            let response = self.command(&format!("genmove {color}"), Duration::from_secs(120))?;
+            (parse_gtp_move(response.trim())?, self.max_visits)
+        };
+
+        self.last_search_millis = started.elapsed().as_millis() as u64;
+        self.last_search_visits = visits;
         Ok(mv)
     }
 
@@ -247,6 +275,53 @@ pub fn board_to_gtp(row: i32, col: i32) -> Result<String, String> {
     Ok(format!("{column}{}", BOARD_SIZE as i32 - row))
 }
 
+/// 解析 kata-genmove_analyze 的完整响应：
+/// 取最后一帧分析行提取真实 visits，取 `play <move>` 行提取着手。
+fn parse_analyze_response(raw: &str) -> Result<((i32, i32), u32), String> {
+    let mut mv: Option<(i32, i32)> = None;
+    let mut last_analysis: Option<&str> = None;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(vertex) = trimmed.strip_prefix("play ") {
+            mv = Some(parse_gtp_move(vertex.trim())?);
+        } else if trimmed.contains("info move") || trimmed.contains("rootInfo") {
+            last_analysis = Some(trimmed);
+        }
+    }
+
+    let mv = mv.ok_or("kata-genmove_analyze 未返回 play 行")?;
+    let visits = last_analysis.map(extract_root_visits).unwrap_or(0);
+    Ok((mv, visits))
+}
+
+/// 从一帧分析行中提取根节点 visits：优先 rootInfo，否则累加各候选着法。
+fn extract_root_visits(line: &str) -> u32 {
+    if let Some(idx) = line.find("rootInfo") {
+        if let Some(v) = number_after_token(&line[idx..], "visits") {
+            return v;
+        }
+    }
+    line.split("info move")
+        .skip(1)
+        .filter_map(|segment| {
+            // 候选段可能包含 rootInfo 尾巴，截断避免重复计数
+            let segment = segment.split("rootInfo").next().unwrap_or(segment);
+            number_after_token(segment, "visits")
+        })
+        .sum()
+}
+
+fn number_after_token(text: &str, token: &str) -> Option<u32> {
+    let mut words = text.split_whitespace();
+    while let Some(word) = words.next() {
+        if word == token {
+            return words.next()?.parse().ok();
+        }
+    }
+    None
+}
+
 pub fn parse_gtp_move(raw: &str) -> Result<(i32, i32), String> {
     let normalized = raw.trim().to_lowercase();
     if normalized == "pass" {
@@ -295,5 +370,38 @@ mod tests {
     fn parse_pass_and_resign() {
         assert_eq!(parse_gtp_move("pass").unwrap(), (-1, -1));
         assert_eq!(parse_gtp_move("RESIGN").unwrap(), (-2, -2));
+    }
+
+    #[test]
+    fn analyze_response_with_root_info() {
+        let raw = "info move Q16 visits 37 winrate 0.51 order 0 pv Q16 D4\n\
+                   info move D4 visits 20 winrate 0.49 order 1 pv D4 rootInfo visits 96 winrate 0.505 scoreMean 0.3\n\
+                   play Q16";
+        let ((row, col), visits) = parse_analyze_response(raw).unwrap();
+        assert_eq!((row, col), (3, 15)); // Q16
+        assert_eq!(visits, 96);
+    }
+
+    #[test]
+    fn analyze_response_sums_candidates_without_root_info() {
+        let raw = "info move C3 visits 30 winrate 0.5 info move E5 visits 12 winrate 0.4\nplay pass";
+        let (mv, visits) = parse_analyze_response(raw).unwrap();
+        assert_eq!(mv, (-1, -1));
+        assert_eq!(visits, 42);
+    }
+
+    #[test]
+    fn analyze_response_takes_last_frame_and_ignores_noise() {
+        let raw = "info move C3 visits 5 winrate 0.5 rootInfo visits 8 winrate 0.5\n\
+                   NN eval cache hits: 123\n\
+                   info move C3 visits 60 winrate 0.5 rootInfo visits 64 winrate 0.5\n\
+                   play C3";
+        let (_, visits) = parse_analyze_response(raw).unwrap();
+        assert_eq!(visits, 64);
+    }
+
+    #[test]
+    fn analyze_response_requires_play_line() {
+        assert!(parse_analyze_response("info move C3 visits 5").is_err());
     }
 }
